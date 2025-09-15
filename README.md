@@ -19,6 +19,7 @@ neo.js是我之前开发的一个项目，主要目的是在web上运行js，但
 neo.js最大的缺点是没有一个稳定的文件管理系统，并且使用Local storage作为持久存储容器，这使得neo.js容量非常小，blockos允许用户保存磁盘为dk文件，这大大增加了存储容量，同时blockos还有稳定的文件管理系统，也更加命令行，有股unix的风范
 # 未来可能加入的功能
 - [ ] 进程管理器(我个人感觉暂时不需要)
+- [ ] 支持国际化(我不确定，因为之前失败了，现在代码量又这么大)
 
 
 
@@ -45,5 +46,6 @@ neo.js was a project I developed before, whose main purpose was to run js on the
 The biggest drawback of neo.js is that it doesn't have a stable file management system and uses Local storage as the persistent storage container, which makes the capacity of neo.js very small. blockos allows users to save disks as dk files, which greatly increases the storage capacity. Meanwhile, blockos also has a stable file management system. It is also more command-line and has a unix style
 # Possible features to be added in the future
 - [ ] Process Manager (I personally feel it's not needed for the time being)
+- [ ] Support internationalization (I'm not sure because it failed before and now the codebase is so large)
 # Language
 Blockos does not support i18n; I have tried, but failed. Since the core of Blockos is in Chinese, I ask non-Chinese language users to translate the source code themselves, thank you.

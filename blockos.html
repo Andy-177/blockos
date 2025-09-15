@@ -15,12 +15,14 @@
             height: 100vh;
             display: flex;
             flex-direction: column;
+            overflow: hidden; /* 防止页面整体滚动 */
         }
         .terminal {
             flex: 1;
             padding: 10px;
             box-sizing: border-box;
-            overflow: auto;
+            overflow-y: auto; /* 垂直滚动 */
+            overflow-x: auto; /* 水平滚动，防止内容溢出 */
         }
         .output {
             white-space: pre-wrap;
@@ -32,6 +34,8 @@
             padding: 10px;
             background-color: #111;
             border-top: 1px solid #333;
+            width: 100%;
+            box-sizing: border-box;
         }
         input[type="text"] {
             background: transparent;
@@ -55,31 +59,56 @@
             vertical-align: middle;
         }
 
+
         /* 下载任务列表样式优化 */
         .download-task-display {
             white-space: pre;
         }
+
+        /* 滚动条样式美化 */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        
+        ::-webkit-scrollbar-track {
+            background: #111;
+        }
+        
+        ::-webkit-scrollbar-thumb {
+            background: #333;
+        }
+        
+        ::-webkit-scrollbar-thumb:hover {
+            background: #555;
+        }
     </style>
 </head>
 <body>
+    <!-- 分离内容区域和输入区域 -->
     <div class="terminal">
         <div class="output" id="output"></div>
-        <div class="input">
-            <span class="path" id="currentPath">/disk/</span>
-            <input type="text" id="commandInput" placeholder="Enter command..." autocomplete="off">
-        </div>
     </div>
+    <!-- 输入区固定在底部 -->
+    <div class="input">
+        <span class="path" id="currentPath">/disk/</span>
+        <input type="text" id="commandInput" placeholder="Enter command..." autocomplete="off">
+    </div>
+
 
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.7.1/jszip.min.js"></script>
     <script>
         const outputDiv = document.getElementById('output');
         const commandInput = document.getElementById('commandInput');
         const currentPathElement = document.getElementById('currentPath');
+        const terminalDiv = document.querySelector('.terminal'); // 获取终端容器
+
 
         // 重定向控制台输出 - 严格使用文本
         const originalConsoleLog = console.log;
         const originalConsoleError = console.error;
         const originalConsoleWarn = console.warn;
+
 
         console.log = function(...args) {
             const output = args.join(' ');
@@ -91,6 +120,7 @@
             originalConsoleLog(...args);
         };
 
+
         console.error = function(...args) {
             const output = args.join(' ');
             const p = document.createElement('p');
@@ -100,6 +130,7 @@
             scrollToBottom();
             originalConsoleError(...args);
         };
+
 
         console.warn = function(...args) {
             const output = args.join(' ');
@@ -111,6 +142,7 @@
             originalConsoleWarn(...args);
         };
 
+
         // 自定义日志方法
         function infoLog(...args) {
             const output = args.join(' ');
@@ -121,6 +153,7 @@
             scrollToBottom();
         }
 
+
         // 自定义tree输出方法，保留空格格式
         function treeLog(text) {
             const p = document.createElement('p');
@@ -130,10 +163,12 @@
             scrollToBottom();
         }
 
+
         // 生成指定长度的字符串
         function repeatChar(char, length) {
             return new Array(length + 1).join(char);
         }
+
 
         // 多磁盘系统
         let disks = {
@@ -203,17 +238,21 @@
         let currentDisk = 'disk';
         let currentPath = ['/'];
 
+
         // 辅助函数：滚动到底部
         function scrollToBottom() {
-            outputDiv.scrollTop = outputDiv.scrollHeight;
+            // 使用终端容器进行滚动，而不是输出div
+            terminalDiv.scrollTop = terminalDiv.scrollHeight;
         }
+
 
         // 更新当前路径显示
         function updateCurrentPath() {
             currentPathElement.textContent = `/${currentDisk}${currentPath.join('/').replace('//', '/')} `;
         }
 
-        // 获取指定路径的节点
+
+        // 获取指定路径的节点 - 修复根目录文件访问问题
         function getNodeByPath(path) {
             const resolved = resolvePath(path);
             
@@ -237,16 +276,18 @@
                 return { node: dir, disk: targetDisk };
             }
             
-            // 处理当前磁盘内路径
+            // 处理当前磁盘内路径 - 修复根目录文件访问
             let dir = disks[currentDisk].filesystem;
             for (let i = 1; i < resolved.path.length; i++) {
-                if (!dir.children[resolved.path[i]]) {
+                // 修复：检查是否存在该子节点
+                if (!dir.children || !dir.children[resolved.path[i]]) {
                     return null;
                 }
                 dir = dir.children[resolved.path[i]];
             }
             return { node: dir, disk: disks[currentDisk] };
         }
+
 
         // 解析路径
         function resolvePath(path) {
@@ -289,6 +330,7 @@
             return { isRoot: false, isCrossDisk: false, path: resolvedPath };
         }
 
+
         // 切换磁盘
         function switchDisk(diskName) {
             if (!disks[diskName]) {
@@ -302,6 +344,7 @@
             console.log(`已切换到磁盘 ${diskName}`);
             return true;
         }
+
 
         // ls 命令实现
         function ls(path = '.') {
@@ -352,6 +395,7 @@
             return true;
         }
 
+
         // tree 命令实现
         function tree(path = '.') {
             // tree 和 tree . 都显示整个磁盘的树形结构
@@ -388,6 +432,7 @@
             return true;
         }
 
+
         // 显示整个磁盘的树形结构
         function displayDiskTree(diskName) {
             const disk = disks[diskName];
@@ -402,6 +447,7 @@
             
             return true;
         }
+
 
         // 递归显示树形结构
         function displayTreeRecursive(children, prefix) {
@@ -431,10 +477,12 @@
             });
         }
 
+
         // 查看所有挂载的磁盘
         function lsd() {
             return ls('/');
         }
+
 
         // 切换目录命令
         function cd(path = '/') {
@@ -455,6 +503,7 @@
                 return false;
             }
 
+
             // 更新当前路径
             const resolved = resolvePath(path);
             if (!resolved.isCrossDisk) {
@@ -468,6 +517,7 @@
             }
         }
 
+
         // 创建目录
         function mkdir(directoryName) {
             const currentDirInfo = getNodeByPath('.');
@@ -476,6 +526,7 @@
                 return false;
             }
 
+
             const currentDir = currentDirInfo.node;
             
             if (currentDir.children[directoryName]) {
@@ -483,15 +534,18 @@
                 return false;
             }
 
+
             currentDir.children[directoryName] = {
                 name: directoryName,
                 type: 'directory',
                 children: {}
             };
 
+
             console.log(`目录 ${directoryName} 创建成功`);
             return true;
         }
+
 
         // 创建文件
         function touch(filename) {
@@ -501,6 +555,7 @@
                 return false;
             }
 
+
             const currentDir = currentDirInfo.node;
             
             if (currentDir.children[filename]) {
@@ -508,15 +563,18 @@
                 return false;
             }
 
+
             currentDir.children[filename] = {
                 name: filename,
                 type: 'file',
                 content: ''
             };
 
+
             console.log(`文件 ${filename} 创建成功`);
             return true;
         }
+
 
         // 删除文件/目录
         function rm(path) {
@@ -532,11 +590,35 @@
                 return false;
             }
             
-            // 获取父目录
-            const parentPath = resolved.path.slice(0, -1).join('/') || '.';
+            // 获取父目录 - 修复：处理根目录情况
+            const parentPath = resolved.path.length > 1 
+                ? resolved.path.slice(0, -1).join('/') 
+                : '/';  // 如果是根目录下的文件/目录，父路径为根目录
+            
             const parentInfo = getNodeByPath(parentPath);
             
-            if (!parentInfo || parentInfo.isRoot || parentInfo.node.type !== 'directory') {
+            if (!parentInfo || parentInfo.isRoot) {
+                // 父目录是根目录的情况
+                if (resolved.path.length !== 2) {  // 根目录下的项目路径长度应为2: ['/', 'item']
+                    console.error(`路径 ${path} 不存在`);
+                    return false;
+                }
+                
+                // 父目录是当前磁盘的根目录
+                const targetName = resolved.path[1];
+                if (!disks[currentDisk].filesystem.children[targetName]) {
+                    console.error(`路径 ${path} 不存在`);
+                    return false;
+                }
+                
+                // 从根目录删除
+                delete disks[currentDisk].filesystem.children[targetName];
+                console.log(`已删除 ${path}`);
+                return true;
+            }
+            
+            // 常规情况 - 父目录是普通目录
+            if (parentInfo.node.type !== 'directory') {
                 console.error(`路径 ${path} 不存在`);
                 return false;
             }
@@ -547,10 +629,12 @@
                 return false;
             }
 
+
             delete parentInfo.node.children[targetName];
             console.log(`已删除 ${path}`);
             return true;
         }
+
 
         // 查看文件内容 - 纯文本显示，不添加任何样式
         function cat(filename) {
@@ -561,6 +645,7 @@
                 return null;
             }
 
+
             // 纯文本显示文件内容，保持命令行风格
             console.log(`===== 文件 ${filename} 内容开始 =====`);
             const lines = fileInfo.node.content.split('\n');
@@ -570,12 +655,13 @@
             return fileInfo.node.content;
         }
 
-        // 导入文件或文件夹
-        function importFiles() {
+
+        // 导入文件夹 - ipj 命令
+        function importFolder() {
             const input = document.createElement('input');
             input.type = 'file';
-            input.multiple = true;
             input.webkitdirectory = true;
+            input.multiple = false;
             
             input.onchange = async function(event) {
                 const files = event.target.files;
@@ -587,99 +673,123 @@
                     return;
                 }
                 
-                // 按路径分组处理文件
-                const fileGroups = {};
+                // 获取基础文件夹名称
+                const baseFolderName = files[0].webkitRelativePath.split('/')[0];
                 
+                // 创建基础文件夹
+                if (!currentDir.node.children[baseFolderName]) {
+                    currentDir.node.children[baseFolderName] = {
+                        name: baseFolderName,
+                        type: 'directory',
+                        children: {}
+                    };
+                    console.log(`创建目录: ${baseFolderName}`);
+                }
+                
+                const baseDir = currentDir.node.children[baseFolderName];
+                
+                // 处理所有文件
                 for (const file of files) {
-                    const relativePath = file.webkitRelativePath || file.name;
-                    const pathParts = relativePath.split('/');
-                    
-                    // 找到基础目录
-                    let baseDir = '';
-                    if (pathParts.length > 1) {
-                        baseDir = pathParts[0];
-                    }
-                    
-                    if (!fileGroups[baseDir]) {
-                        fileGroups[baseDir] = [];
-                    }
-                    
-                    fileGroups[baseDir].push({
-                        file,
-                        relativePath,
-                        pathParts
-                    });
-                }
-                
-                // 处理每个文件组
-                for (const [baseDir, groupFiles] of Object.entries(fileGroups)) {
-                    let targetDir = currentDir.node;
-                    
-                    // 如果是文件夹导入，创建基础目录
-                    if (baseDir && groupFiles.length > 1) {
-                        if (!targetDir.children[baseDir]) {
-                            targetDir.children[baseDir] = {
-                                name: baseDir,
-                                type: 'directory',
-                                children: {}
-                            };
-                            console.log(`创建目录: ${baseDir}`);
-                        }
-                        targetDir = targetDir.children[baseDir];
-                    }
-                    
-                    // 处理组内文件
-                    for (const { file, pathParts } of groupFiles) {
-                        try {
-                            // 获取相对路径中的文件名部分
-                            const fileName = pathParts[pathParts.length - 1];
-                            const relPath = pathParts.slice(baseDir ? 1 : 0, -1);
-                            
-                            // 创建中间目录
-                            let currentTargetDir = targetDir;
-                            for (const dirPart of relPath) {
-                                if (!currentTargetDir.children[dirPart]) {
-                                    currentTargetDir.children[dirPart] = {
-                                        name: dirPart,
-                                        type: 'directory',
-                                        children: {}
-                                    };
-                                    console.log(`创建目录: ${dirPart}`);
-                                }
-                                currentTargetDir = currentTargetDir.children[dirPart];
+                    try {
+                        const relativePath = file.webkitRelativePath;
+                        const pathParts = relativePath.split('/').slice(1); // 移除基础文件夹
+                        const fileName = pathParts.pop();
+                        
+                        // 创建中间目录
+                        let currentTargetDir = baseDir;
+                        for (const dirPart of pathParts) {
+                            if (!currentTargetDir.children[dirPart]) {
+                                currentTargetDir.children[dirPart] = {
+                                    name: dirPart,
+                                    type: 'directory',
+                                    children: {}
+                                };
+                                console.log(`创建目录: ${dirPart}`);
                             }
-                            
-                            // 检查文件是否已存在
-                            if (currentTargetDir.children[fileName]) {
-                                console.warn(`文件 ${fileName} 已存在，已跳过`);
-                                continue;
-                            }
-                            
-                            // 读取文件内容
-                            const content = await file.text();
-                            
-                            // 创建文件
-                            currentTargetDir.children[fileName] = {
-                                name: fileName,
-                                type: 'file',
-                                content: content
-                            };
-                            
-                            console.log(`导入文件: ${fileName}`);
-                        } catch (error) {
-                            console.error(`导入文件 ${file.name} 失败: ${error.message}`);
+                            currentTargetDir = currentTargetDir.children[dirPart];
                         }
+                        
+                        // 检查文件是否已存在
+                        if (currentTargetDir.children[fileName]) {
+                            console.warn(`文件 ${fileName} 已存在，已跳过`);
+                            continue;
+                        }
+                        
+                        // 读取文件内容
+                        const content = await file.text();
+                        
+                        // 创建文件
+                        currentTargetDir.children[fileName] = {
+                            name: fileName,
+                            type: 'file',
+                            content: content
+                        };
+                        
+                        console.log(`导入文件: ${relativePath}`);
+                    } catch (error) {
+                        console.error(`导入文件 ${file.name} 失败: ${error.message}`);
                     }
                 }
                 
-                console.log("导入操作完成");
+                console.log(`文件夹 ${baseFolderName} 导入完成`);
             };
             
             input.click();
         }
 
-        // 导出磁盘
-        async function exportDisk(filename = null) {
+
+        // 导入文件 - ife 命令
+        function importFile() {
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.multiple = true;
+            
+            input.onchange = async function(event) {
+                const files = event.target.files;
+                if (!files || files.length === 0) return;
+                
+                const currentDir = getNodeByPath('.');
+                if (!currentDir || currentDir.isRoot || currentDir.node.type !== 'directory') {
+                    console.error("当前目录不存在");
+                    return;
+                }
+                
+                // 处理每个文件
+                for (const file of files) {
+                    try {
+                        const fileName = file.name;
+                        
+                        // 检查文件是否已存在
+                        if (currentDir.node.children[fileName]) {
+                            console.warn(`文件 ${fileName} 已存在，已跳过`);
+                            continue;
+                        }
+                        
+                        // 读取文件内容
+                        const content = await file.text();
+                        
+                        // 创建文件
+                        currentDir.node.children[fileName] = {
+                            name: fileName,
+                            type: 'file',
+                            content: content
+                        };
+                        
+                        console.log(`导入文件: ${fileName}`);
+                    } catch (error) {
+                        console.error(`导入文件 ${file.name} 失败: ${error.message}`);
+                    }
+                }
+                
+                console.log("文件导入完成");
+            };
+            
+            input.click();
+        }
+
+
+        // 导出磁盘为.dk - odk 命令
+        async function exportAsDk(filename = null) {
             // 生成默认文件名: disk:时间戳(精确到秒).dk
             if (!filename) {
                 const timestamp = Math.floor(Date.now() / 1000);
@@ -687,6 +797,7 @@
             } else if (!filename.endsWith('.dk')) {
                 filename += '.dk';
             }
+
 
             try {
                 const zip = new JSZip();
@@ -706,9 +817,21 @@
             }
         }
 
-        // 运行程序或脚本
+
+        // 运行程序或脚本 - 修复根目录文件运行问题和JavaScript执行问题
         function run(path) {
-            const fileInfo = getNodeByPath(path);
+            // 修复：支持根目录文件运行，处理绝对路径
+            let resolvedPath = path;
+            if (!path.startsWith('/')) {
+                // 如果是相对路径，尝试从当前目录和根目录都查找
+                const rootPath = `/${path}`;
+                const rootFileInfo = getNodeByPath(rootPath);
+                if (rootFileInfo && !rootFileInfo.isRoot && rootFileInfo.node.type === 'file') {
+                    resolvedPath = rootPath;
+                }
+            }
+            
+            const fileInfo = getNodeByPath(resolvedPath);
             
             if (!fileInfo || fileInfo.isRoot || fileInfo.node.type !== 'file') {
                 console.error(`文件 ${path} 不存在`);
@@ -719,7 +842,6 @@
             
             try {
                 const content = fileInfo.node.content;
-                console.log(`运行 ${fileName}:`);
                 
                 // 创建执行环境
                 const executionContext = {
@@ -742,9 +864,10 @@
                 
                 // 根据文件类型执行
                 if (fileName.endsWith('.js')) {
-                    // 执行JavaScript程序
-                    const programFunction = new Function('console', 'import', content);
-                    programFunction(console, executionContext.import);
+                    // 执行JavaScript程序 - 修复：简化参数绑定
+                    // 只绑定console参数，避免未使用import时的错误
+                    const programFunction = new Function('console', content);
+                    programFunction(console);
                 } else if (fileName.endsWith('.r')) {
                     // 执行r脚本
                     // 简单的r语法转换为JavaScript
@@ -759,13 +882,27 @@
                     return false;
                 }
                 
-                console.log(`${fileName} 运行完成`);
             } catch (error) {
                 console.error(`运行 ${fileName} 失败: ${error.message}`);
             }
             
             return true;
         }
+
+
+        // 新增：直接执行JavaScript代码的命令
+        function executeJavaScript(code) {
+            try {
+                // 创建一个安全的执行环境
+                const result = new Function('console', 'return ' + code)(console);
+                if (result !== undefined) {
+                    console.log("结果:", result);
+                }
+            } catch (error) {
+                console.error("JavaScript执行错误:", error.message);
+            }
+        }
+
 
         // 下载命令 - dd url [path] - 支持真实下载
         function dd(url, savePath = null) {
@@ -898,6 +1035,7 @@
             return true;
         }
 
+
         // 更新下载任务显示 - 使用纯文本进度条
         function updateDownloadDisplay() {
             // 找到所有下载列表元素并更新
@@ -914,6 +1052,7 @@
                 dlist();
             }
         }
+
 
         // 显示下载列表 - dlist
         function dlist() {
@@ -977,6 +1116,7 @@
             return true;
         }
 
+
         // 停止下载 - dstop [id]
         function dstop(taskId = null) {
             if (downloadTasks.length === 0) {
@@ -1018,6 +1158,7 @@
             updateDownloadDisplay();
             return true;
         }
+
 
         // 开始下载 - dstart [id]
         function dstart(taskId = null) {
@@ -1227,6 +1368,7 @@
             return true;
         }
 
+
         // 删除下载任务 - drm [id]
         function drm(taskId = null) {
             if (downloadTasks.length === 0) {
@@ -1270,6 +1412,7 @@
             return true;
         }
 
+
         // 清除已完成的下载任务 - dlsc
         function dlsc() {
             if (downloadTasks.length === 0) {
@@ -1299,7 +1442,8 @@
             return true;
         }
 
-        // 移动文件/目录 - mv path1 path2
+
+        // 移动文件/目录
         function mv(sourcePath, destPath) {
             // 获取源节点信息
             const sourceInfo = getNodeByPath(sourcePath);
@@ -1349,15 +1493,24 @@
                 return false;
             }
             
-            // 获取源文件的父目录
+            // 获取源文件的父目录 - 修复：处理根目录情况
             const sourcePathParts = resolvePath(sourcePath).path;
             const sourceName = sourcePathParts[sourcePathParts.length - 1];
-            const sourceParentPath = sourcePathParts.slice(0, -1).join('/') || '.';
-            const sourceParentInfo = getNodeByPath(sourceParentPath);
             
-            if (!sourceParentInfo || sourceParentInfo.isRoot || sourceParentInfo.node.type !== 'directory') {
-                console.error("无法找到源文件的父目录");
-                return false;
+            // 特殊处理根目录下的文件/目录
+            let sourceParentInfo, sourceParentNode;
+            if (sourcePathParts.length === 2) {  // 根目录下的项目路径长度为2: ['/', 'item']
+                sourceParentNode = disks[currentDisk].filesystem;
+                sourceParentInfo = { node: sourceParentNode };
+            } else {
+                const sourceParentPath = sourcePathParts.slice(0, -1).join('/') || '.';
+                sourceParentInfo = getNodeByPath(sourceParentPath);
+                
+                if (!sourceParentInfo || sourceParentInfo.isRoot || sourceParentInfo.node.type !== 'directory') {
+                    console.error("无法找到源文件的父目录");
+                    return false;
+                }
+                sourceParentNode = sourceParentInfo.node;
             }
             
             // 执行移动操作（深度复制）
@@ -1370,7 +1523,7 @@
             destDirInfo.node.children[destName] = deepCopyNode(sourceInfo.node, destName);
             
             // 删除原节点
-            delete sourceParentInfo.node.children[sourceName];
+            delete sourceParentNode.children[sourceName];
             
             // 统计移动的项目数量
             let itemCount = 0;
@@ -1385,6 +1538,7 @@
             console.log(`已将 ${sourcePath} 移动到 ${destPath}，共移动 ${itemCount} 个项目`);
             return true;
         }
+
 
         // 复制文件/目录 - cp path1 path2
         function cp(sourcePath, destPath) {
@@ -1459,6 +1613,7 @@
             return true;
         }
 
+
         // 格式化文件大小
         function formatFileSize(bytes) {
             if (bytes < 1024) return bytes + ' B';
@@ -1466,7 +1621,8 @@
             else return (bytes / 1048576).toFixed(1) + ' MB';
         }
 
-        // 帮助命令
+
+        // 帮助命令 - 新增js命令说明
         function showHelp() {
             console.log("=== BlockOS 命令帮助 ===");
             console.log("文件类型说明:");
@@ -1484,6 +1640,11 @@
             console.log("  mv <源路径> <目标路径> - 移动文件或目录（包括所有子内容）");
             console.log("  cp <源路径> <目标路径> - 复制文件或目录（包括所有子内容）");
             
+            console.log("\n导入导出命令:");
+            console.log("  ipj               - 导入文件夹到当前目录");
+            console.log("  ife               - 导入文件到当前目录");
+            console.log("  odk [文件名]      - 导出当前磁盘为.dk文件");
+            
             console.log("\n下载管理:");
             console.log("  dd <url> [保存路径] - 下载文件，url为必填，保存路径可选");
             console.log("  dlist             - 查看所有下载任务及进度");
@@ -1497,22 +1658,23 @@
             console.log("  ld <磁盘名>        - 切换到指定磁盘");
             console.log("  mount             - 挂载磁盘文件(.dk)");
             console.log("  unmount <磁盘名>   - 卸载磁盘");
-            console.log("  import            - 导入文件或文件夹到当前目录");
-            console.log("  export [文件名]    - 导出当前磁盘");
             
             console.log("\n程序运行:");
             console.log("  run <文件名>      - 运行.js程序或.r脚本");
+            console.log("  js <代码>            - 直接执行JavaScript代码，例如: js console.log('hello')");
             
             console.log("\n其他命令:");
             console.log("  clear             - 清空屏幕");
             console.log("  help              - 显示此帮助信息");
         }
 
+
         function clearScreen() {
             outputDiv.innerHTML = '';
             console.log("屏幕已清除");
             return true;
         }
+
 
         // 挂载磁盘
         function mount() {
@@ -1565,6 +1727,7 @@
             input.click();
         }
 
+
         // 卸载磁盘
         function unmount(diskName) {
             if (diskName === 'disk') {
@@ -1589,7 +1752,8 @@
             return true;
         }
 
-        // 命令执行器
+
+        // 命令执行器 - 添加js命令支持
         function executeCommand(command) {
             const p = document.createElement('p');
             p.className = 'log';
@@ -1599,8 +1763,10 @@
             const parts = command.trim().split(/\s+/).filter(part => part !== '');
             if (parts.length === 0) return;
 
+
             const cmd = parts[0].toLowerCase();
             const args = parts.slice(1);
+
 
             switch (cmd) {
                 case 'ls':
@@ -1647,16 +1813,31 @@
                     args.length === 1 ? unmount(args[0]) : console.error("使用方法: unmount <磁盘名>");
                     break;
                     
-                case 'import':
-                    importFiles();
+                case 'ipj':
+                    importFolder();
                     break;
                     
-                case 'export':
-                    exportDisk(args.length > 0 ? args[0] : null);
+                case 'ife':
+                    importFile();
+                    break;
+                    
+                case 'odk':
+                    exportAsDk(args.length > 0 ? args[0] : null);
                     break;
                     
                 case 'run':
                     args.length === 1 ? run(args[0]) : console.error("使用方法: run <文件名>");
+                    break;
+                    
+                // 新增：js命令处理
+                case 'js':
+                    if (args.length > 0) {
+                        // 合并所有参数作为要执行的JavaScript代码
+                        const jsCode = args.join(' ');
+                        executeJavaScript(jsCode);
+                    } else {
+                        console.error("使用方法: js <JavaScript代码>，例如: js console.log('hello')");
+                    }
                     break;
                     
                 case 'dd':
@@ -1716,6 +1897,7 @@
             }
         }
 
+
         // 事件监听
         commandInput.addEventListener('keypress', function(event) {
             if (event.key === 'Enter') {
@@ -1725,13 +1907,25 @@
             }
         });
 
+        // 允许使用鼠标滚轮滚动终端内容
+        terminalDiv.addEventListener('wheel', function(e) {
+            // 自然滚动行为，不需要额外处理
+        });
+
+
         // 初始化
         updateCurrentPath();
         commandInput.focus();
         console.log("欢迎使用 BlockOS");
         console.log("最新更新:");
-        console.log("  - 增加了下载任务列表各列之间的间距");
-        console.log("  - 调整了各列宽度，使显示更加清晰");
+        console.log("  - 添加了终端滚动功能");
+        console.log("  - 优化了滚动条样式");
+        console.log("  - 输入框已固定在底部");
+        console.log("  - 新增 ipj 命令: 导入文件夹");
+        console.log("  - 新增 ife 命令: 导入文件");
+        console.log("  - 新增 odk 命令: 导出磁盘为.dk文件");
+        console.log("  - 新增 js 命令: 直接执行JavaScript代码");
+        console.log("  - 移除了JS运行时的额外提示文字");
         console.log("输入 help 查看完整命令列表");
     </script>
 </body>

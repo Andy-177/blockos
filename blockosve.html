@@ -1,0 +1,2882 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BlockOS Terminal with ve Editor</title>
+    <style>
+        /* 保持严格的命令行风格 */
+        body {
+            font-family: "Courier New", Courier, monospace;
+            background-color: #000;
+            color: #00ff00;
+            margin: 0;
+            padding: 0;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden; /* 防止页面整体滚动 */
+        }
+        .terminal {
+            flex: 1;
+            padding: 10px;
+            box-sizing: border-box;
+            overflow-y: auto; /* 垂直滚动 */
+            overflow-x: auto; /* 水平滚动，防止内容溢出 */
+        }
+        .output {
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        .input {
+            display: flex;
+            align-items: center;
+            padding: 10px;
+            background-color: #111;
+            border-top: 1px solid #333;
+            width: 100%;
+            box-sizing: border-box;
+        }
+        input[type="text"] {
+            background: transparent;
+            border: none;
+            color: #00ff00;
+            outline: none;
+            width: calc(100% - 40px);
+            font-family: "Courier New", Courier, monospace;
+        }
+        /* 文本颜色类 - 保持简单 */
+        .error { color: #ff4d4d; }
+        .warn { color: #ffcc00; }
+        .log { color: #00ff00; }
+        .success { color: #00ffff; }
+        .info { color: #ffff00; }
+        .path { color: #ff8000; margin-right: 5px; }
+        
+        /* 进度条使用纯文本字符表示 */
+        .progress-bar {
+            display: inline-block;
+            vertical-align: middle;
+        }
+
+
+        /* 下载任务列表样式优化 */
+        .download-task-display {
+            white-space: pre;
+        }
+
+        /* 滚动条样式美化 */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        
+        ::-webkit-scrollbar-track {
+            background: #111;
+        }
+        
+        ::-webkit-scrollbar-thumb {
+            background: #333;
+        }
+        
+        ::-webkit-scrollbar-thumb:hover {
+            background: #555;
+        }
+    </style>
+</head>
+<body>
+    <!-- 分离内容区域和输入区域 -->
+    <div class="terminal">
+        <div class="output" id="output"></div>
+    </div>
+    <!-- 输入区固定在底部 -->
+    <div class="input">
+        <span class="path" id="currentPath">/disk/</span>
+        <input type="text" id="commandInput" placeholder="Enter command..." autocomplete="off">
+    </div>
+
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.7.1/jszip.min.js"></script>
+    <script>
+        const outputDiv = document.getElementById('output');
+        const commandInput = document.getElementById('commandInput');
+        const currentPathElement = document.getElementById('currentPath');
+        const terminalDiv = document.querySelector('.terminal'); // 获取终端容器
+
+
+        // 重定向控制台输出 - 严格使用文本
+        const originalConsoleLog = console.log;
+        const originalConsoleError = console.error;
+        const originalConsoleWarn = console.warn;
+
+
+        console.log = function(...args) {
+            const output = args.join(' ');
+            const p = document.createElement('p');
+            p.className = 'log';
+            p.textContent = output; // 始终使用textContent
+            outputDiv.appendChild(p);
+            scrollToBottom();
+            originalConsoleLog(...args);
+        };
+
+
+        console.error = function(...args) {
+            const output = args.join(' ');
+            const p = document.createElement('p');
+            p.className = 'error';
+            p.textContent = output;
+            outputDiv.appendChild(p);
+            scrollToBottom();
+            originalConsoleError(...args);
+        };
+
+
+        console.warn = function(...args) {
+            const output = args.join(' ');
+            const p = document.createElement('p');
+            p.className = 'warn';
+            p.textContent = output;
+            outputDiv.appendChild(p);
+            scrollToBottom();
+            originalConsoleWarn(...args);
+        };
+
+
+        // 自定义日志方法
+        function infoLog(...args) {
+            const output = args.join(' ');
+            const p = document.createElement('p');
+            p.className = 'info';
+            p.textContent = output;
+            outputDiv.appendChild(p);
+            scrollToBottom();
+        }
+
+
+        // 自定义tree输出方法，保留空格格式
+        function treeLog(text) {
+            const p = document.createElement('p');
+            p.className = 'log';
+            p.textContent = text;
+            outputDiv.appendChild(p);
+            scrollToBottom();
+        }
+
+
+        // 生成指定长度的字符串
+        function repeatChar(char, length) {
+            return new Array(length + 1).join(char);
+        }
+
+
+        // 命令管理系统 - 新增功能
+        const CommandManager = {
+            // 系统命令列表 - 不可修改，添加ve作为系统命令
+            systemCommands: [
+                'ls', 'tree', 'lsd', 'cd', 'mkdir', 'touch', 'rm', 'cat', 
+                'ld', 'mount', 'unmount', 'ipj', 'ife', 'odk', 'run', 'js',
+                'dd', 'dlist', 'dstop', 'dstart', 'drm', 'dlsc', 'mv', 'cp',
+                'clear', 'help', 'registercmd', 'unregistercmd', 'listcmds',
+                've'  // 添加ve作为系统命令
+            ],
+            
+            // 存储自定义命令
+            customCommands: {},
+            
+            /**
+             * 注册自定义命令
+             * @param {string} name - 命令名称
+             * @param {function} handler - 命令处理函数，接收args参数
+             * @param {string} description - 命令描述，用于help
+             * @returns {boolean} - 是否注册成功
+             */
+            register: function(name, handler, description = '') {
+                // 检查是否为系统命令
+                if (this.systemCommands.includes(name.toLowerCase())) {
+                    console.error(`无法注册命令 '${name}': 系统命令不可覆盖`);
+                    return false;
+                }
+                
+                // 检查命令名是否有效
+                if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
+                    console.error(`命令名 '${name}' 无效，只能包含字母、数字、下划线和连字符`);
+                    return false;
+                }
+                
+                // 检查处理函数是否有效
+                if (typeof handler !== 'function') {
+                    console.error(`注册命令 '${name}' 失败: 处理函数必须是一个函数`);
+                    return false;
+                }
+                
+                this.customCommands[name.toLowerCase()] = {
+                    handler: handler,
+                    description: description
+                };
+                
+                console.log(`命令 '${name}' 已成功注册`);
+                return true;
+            },
+            
+            /**
+             * 注销自定义命令
+             * @param {string} name - 命令名称
+             * @returns {boolean} - 是否注销成功
+             */
+            unregister: function(name) {
+                const cmdName = name.toLowerCase();
+                
+                // 检查是否为系统命令
+                if (this.systemCommands.includes(cmdName)) {
+                    console.error(`无法注销命令 '${name}': 系统命令不可注销`);
+                    return false;
+                }
+                
+                // 检查命令是否存在
+                if (!this.customCommands[cmdName]) {
+                    console.error(`无法注销命令 '${name}': 命令不存在`);
+                    return false;
+                }
+                
+                delete this.customCommands[cmdName];
+                console.log(`命令 '${name}' 已成功注销`);
+                return true;
+            },
+            
+            /**
+             * 执行命令
+             * @param {string} name - 命令名称
+             * @param {array} args - 命令参数
+             * @returns {boolean} - 是否执行成功
+             */
+            execute: function(name, args) {
+                const cmdName = name.toLowerCase();
+                
+                // 先检查自定义命令
+                if (this.customCommands[cmdName]) {
+                    try {
+                        this.customCommands[cmdName].handler(args);
+                        return true;
+                    } catch (error) {
+                        console.error(`执行命令 '${name}' 时出错: ${error.message}`);
+                        return false;
+                    }
+                }
+                
+                // 系统命令由主执行器处理
+                return false;
+            },
+            
+            /**
+             * 列出所有命令
+             * @param {boolean} showSystem - 是否显示系统命令
+             * @param {boolean} showCustom - 是否显示自定义命令
+             */
+            list: function(showSystem = true, showCustom = true) {
+                if (showSystem) {
+                    console.log("系统命令:");
+                    this.systemCommands.sort().forEach(cmd => {
+                        console.log(`  ${cmd}`);
+                    });
+                }
+                
+                if (showCustom) {
+                    const customCmds = Object.keys(this.customCommands);
+                    if (customCmds.length > 0) {
+                        console.log("\n自定义命令:");
+                        customCmds.sort().forEach(cmd => {
+                            const desc = this.customCommands[cmd].description 
+                                ? ` - ${this.customCommands[cmd].description}` 
+                                : '';
+                            console.log(`  ${cmd}${desc}`);
+                        });
+                    } else if (!showSystem) {
+                        console.log("没有注册的自定义命令");
+                    }
+                }
+            }
+        };
+
+
+        // 多磁盘系统
+        let disks = {
+            'disk': {
+                name: 'disk',
+                filesystem: {
+                    name: '/',
+                    type: 'directory',
+                    children: {
+                        'data': { 
+                            name: 'data', 
+                            type: 'directory', 
+                            children: {
+                                'logs': { 
+                                    name: 'logs', 
+                                    type: 'directory', 
+                                    children: {
+                                        'system.log': { name: 'system.log', type: 'file', content: 'System logs...' }
+                                    } 
+                                },
+                                'config.json': { name: 'config.json', type: 'file', content: '{"version": "1.0"}' }
+                            }
+                        },
+                        'programs': { 
+                            name: 'programs', 
+                            type: 'directory', 
+                            children: {
+                                'app1': { 
+                                    name: 'app1', 
+                                    type: 'directory', 
+                                    children: {
+                                        'main.js': {
+                                            name: 'main.js', 
+                                            type: 'file', 
+                                            content: 'console.log("App1 main program started");\nfunction run() {\n  return "App1 running";\n}'
+                                        },
+                                        'start.r': {
+                                            name: 'start.r', 
+                                            type: 'file', 
+                                            content: 'print("Starting App1...")\nload("main.js")'
+                                        }
+                                    } 
+                                },
+                                'core.js': {
+                                    name: 'core.js', 
+                                    type: 'file', 
+                                    content: 'console.log("Core system initialized");\nexport function init() {\n  return true;\n}'
+                                }
+                            } 
+                        },
+                        'downloads': {  // 下载目录
+                            name: 'downloads', 
+                            type: 'directory', 
+                            children: {}
+                        },
+                        'readme.txt': { name: 'readme.txt', type: 'file', content: 'Welcome to BlockOS!\n- .js 为程序文件\n- .r 为脚本文件' }
+                    }
+                }
+            }
+        };
+        
+        // 下载任务管理
+        let downloadTasks = [];
+        let nextTaskId = 1;
+        
+        // 当前状态
+        let currentDisk = 'disk';
+        let currentPath = ['/'];
+
+
+        // 辅助函数：滚动到底部
+        function scrollToBottom() {
+            // 使用终端容器进行滚动，而不是输出div
+            terminalDiv.scrollTop = terminalDiv.scrollHeight;
+        }
+
+
+        // 更新当前路径显示
+        function updateCurrentPath() {
+            currentPathElement.textContent = `/${currentDisk}${currentPath.join('/').replace('//', '/')} `;
+        }
+
+
+        // 获取指定路径的节点 - 修复根目录文件访问问题
+        function getNodeByPath(path) {
+            const resolved = resolvePath(path);
+            
+            // 处理根目录
+            if (resolved.isRoot) {
+                return { isRoot: true };
+            }
+            
+            // 处理跨磁盘路径
+            if (resolved.isCrossDisk) {
+                const targetDisk = disks[resolved.diskName];
+                if (!targetDisk) return null;
+                
+                let dir = targetDisk.filesystem;
+                for (const part of resolved.subPath) {
+                    if (!dir.children[part]) {
+                        return null;
+                    }
+                    dir = dir.children[part];
+                }
+                return { node: dir, disk: targetDisk };
+            }
+            
+            // 处理当前磁盘内路径 - 修复根目录文件访问
+            let dir = disks[currentDisk].filesystem;
+            for (let i = 1; i < resolved.path.length; i++) {
+                // 修复：检查是否存在该子节点
+                if (!dir.children || !dir.children[resolved.path[i]]) {
+                    return null;
+                }
+                dir = dir.children[resolved.path[i]];
+            }
+            return { node: dir, disk: disks[currentDisk] };
+        }
+
+
+        // 解析路径
+        function resolvePath(path) {
+            let resolvedPath = [...currentPath];
+            
+            if (path.startsWith('/')) {
+                // 绝对路径处理
+                if (path === '/') {
+                    return { isRoot: true };
+                }
+                
+                const pathParts = path.split('/').filter(part => part !== '');
+                // 检查是否是跨磁盘路径
+                if (pathParts.length > 0 && disks[pathParts[0]]) {
+                    return { 
+                        isCrossDisk: true, 
+                        diskName: pathParts[0], 
+                        subPath: pathParts.slice(1)
+                    };
+                } else {
+                    // 当前磁盘内的绝对路径
+                    resolvedPath = ['/'];
+                }
+            }
+            
+            // 处理路径部分
+            const pathParts = path.startsWith('/') ? 
+                path.split('/').filter(part => part !== '') : 
+                path.split('/').filter(part => part !== '');
+                
+            pathParts.forEach(part => {
+                if (part === '.') return;
+                if (part === '..' && resolvedPath.length > 1) {
+                    resolvedPath.pop();
+                } else if (part !== '..') {
+                    resolvedPath.push(part);
+                }
+            });
+            
+            return { isRoot: false, isCrossDisk: false, path: resolvedPath };
+        }
+
+
+        // 切换磁盘
+        function switchDisk(diskName) {
+            if (!disks[diskName]) {
+                console.error(`磁盘 ${diskName} 不存在`);
+                return false;
+            }
+            
+            currentDisk = diskName;
+            currentPath = ['/'];
+            updateCurrentPath();
+            console.log(`已切换到磁盘 ${diskName}`);
+            return true;
+        }
+
+
+        // ls 命令实现
+        function ls(path = '.') {
+            const nodeInfo = getNodeByPath(path);
+            
+            if (!nodeInfo) {
+                console.error(`路径 ${path} 不存在于当前挂载的磁盘中`);
+                return false;
+            }
+            
+            // 处理根目录（显示所有磁盘）
+            if (nodeInfo.isRoot) {
+                console.log("已挂载的磁盘:");
+                Object.keys(disks).forEach(diskName => {
+                    console.log(`${diskName}${diskName === currentDisk ? ' *' : ''}`);
+                });
+                console.log("* 表示当前挂载的磁盘");
+                return true;
+            }
+            
+            const { node, disk } = nodeInfo;
+            
+            // 显示路径信息
+            console.log(`路径 ${path} (${disk.name}) 内容:`);
+            
+            // 如果是文件，直接显示文件名
+            if (node.type === 'file') {
+                console.log(node.name);
+                return true;
+            }
+            
+            // 如果是目录，显示其内容
+            const entries = Object.values(node.children);
+            if (entries.length === 0) {
+                console.log("目录为空");
+                return true;
+            }
+            
+            // 区分显示目录、程序和脚本
+            entries.forEach(entry => {
+                if (entry.type === 'directory') {
+                    console.log(`${entry.name}/`);
+                } else {
+                    console.log(entry.name);
+                }
+            });
+            
+            return true;
+        }
+
+
+        // tree 命令实现
+        function tree(path = '.') {
+            // tree 和 tree . 都显示整个磁盘的树形结构
+            if (path === '.' || path === '/') {
+                return displayDiskTree(currentDisk);
+            }
+            
+            // 解析路径
+            const nodeInfo = getNodeByPath(path);
+            
+            if (!nodeInfo) {
+                console.error(`路径 ${path} 不存在于当前挂载的磁盘中`);
+                return false;
+            }
+            
+            // 处理根目录（显示当前磁盘树形结构）
+            if (nodeInfo.isRoot) {
+                return displayDiskTree(currentDisk);
+            }
+            
+            const { node, disk } = nodeInfo;
+            
+            // 如果是文件，直接显示
+            if (node.type === 'file') {
+                console.log(node.name);
+                return true;
+            }
+            
+            // 显示指定目录的树形结构
+            console.log(`当前磁盘 ${disk.name} 中路径 ${path} 的树形结构:`);
+            treeLog(`${node.name}/`);
+            displayTreeRecursive(node.children, '');
+            
+            return true;
+        }
+
+
+        // 显示整个磁盘的树形结构
+        function displayDiskTree(diskName) {
+            const disk = disks[diskName];
+            if (!disk) {
+                console.error(`磁盘 ${diskName} 不存在`);
+                return false;
+            }
+            
+            console.log(`磁盘 ${diskName} 的完整树形结构:`);
+            treeLog(`/${diskName}/`);
+            displayTreeRecursive(disk.filesystem.children, '');
+            
+            return true;
+        }
+
+
+        // 递归显示树形结构
+        function displayTreeRecursive(children, prefix) {
+            const entries = Object.values(children).sort((a, b) => {
+                // 先显示目录，再显示文件
+                if (a.type !== b.type) {
+                    return a.type === 'directory' ? -1 : 1;
+                }
+                // 按名称排序
+                return a.name.localeCompare(b.name);
+            });
+            
+            entries.forEach((entry, index) => {
+                const isLast = index === entries.length - 1;
+                const linePrefix = isLast ? '└── ' : '├── ';
+                const childPrefix = isLast ? '    ' : '│   ';
+                
+                if (entry.type === 'directory') {
+                    treeLog(`${prefix}${linePrefix}${entry.name}/`);
+                    // 递归显示子目录
+                    if (Object.keys(entry.children).length > 0) {
+                        displayTreeRecursive(entry.children, prefix + childPrefix);
+                    }
+                } else {
+                    treeLog(`${prefix}${linePrefix}${entry.name}`);
+                }
+            });
+        }
+
+
+        // 查看所有挂载的磁盘
+        function lsd() {
+            return ls('/');
+        }
+
+
+        // 切换目录命令
+        function cd(path = '/') {
+            const nodeInfo = getNodeByPath(path);
+            
+            if (!nodeInfo || nodeInfo.isRoot) {
+                // 处理根目录
+                currentPath = ['/'];
+                updateCurrentPath();
+                console.log(`已切换到 ${currentDisk} 磁盘根目录`);
+                return true;
+            }
+            
+            const { node } = nodeInfo;
+            
+            if (!node || node.type !== 'directory') {
+                console.error(`目录 ${path} 不存在`);
+                return false;
+            }
+
+
+            // 更新当前路径
+            const resolved = resolvePath(path);
+            if (!resolved.isCrossDisk) {
+                currentPath = resolved.path;
+                updateCurrentPath();
+                console.log(`已切换到 ${currentPath.join('/').replace('//', '/')}`);
+                return true;
+            } else {
+                console.error("cd命令不支持跨磁盘切换，请使用ld命令");
+                return false;
+            }
+        }
+
+
+        // 创建目录
+        function mkdir(directoryName) {
+            const currentDirInfo = getNodeByPath('.');
+            if (!currentDirInfo || currentDirInfo.isRoot || currentDirInfo.node.type !== 'directory') {
+                console.error("当前目录不存在");
+                return false;
+            }
+
+
+            const currentDir = currentDirInfo.node;
+            
+            if (currentDir.children[directoryName]) {
+                console.error(`目录 ${directoryName} 已存在`);
+                return false;
+            }
+
+
+            currentDir.children[directoryName] = {
+                name: directoryName,
+                type: 'directory',
+                children: {}
+            };
+
+
+            console.log(`目录 ${directoryName} 创建成功`);
+            return true;
+        }
+
+
+        // 创建文件
+        function touch(filename) {
+            const currentDirInfo = getNodeByPath('.');
+            if (!currentDirInfo || currentDirInfo.isRoot || currentDirInfo.node.type !== 'directory') {
+                console.error("当前目录不存在");
+                return false;
+            }
+
+
+            const currentDir = currentDirInfo.node;
+            
+            if (currentDir.children[filename]) {
+                console.error(`文件 ${filename} 已存在`);
+                return false;
+            }
+
+
+            currentDir.children[filename] = {
+                name: filename,
+                type: 'file',
+                content: ''
+            };
+
+
+            console.log(`文件 ${filename} 创建成功`);
+            return true;
+        }
+
+
+        // 删除文件/目录
+        function rm(path) {
+            const resolved = resolvePath(path);
+            
+            if (resolved.isRoot) {
+                console.error("不能删除根目录");
+                return false;
+            }
+            
+            if (resolved.isCrossDisk) {
+                console.error("rm命令不支持跨磁盘操作");
+                return false;
+            }
+            
+            // 获取父目录 - 修复：处理根目录情况
+            const parentPath = resolved.path.length > 1 
+                ? resolved.path.slice(0, -1).join('/') 
+                : '/';  // 如果是根目录下的文件/目录，父路径为根目录
+            
+            const parentInfo = getNodeByPath(parentPath);
+            
+            if (!parentInfo || parentInfo.isRoot) {
+                // 父目录是根目录的情况
+                if (resolved.path.length !== 2) {  // 根目录下的项目路径长度应为2: ['/', 'item']
+                    console.error(`路径 ${path} 不存在`);
+                    return false;
+                }
+                
+                // 父目录是当前磁盘的根目录
+                const targetName = resolved.path[1];
+                if (!disks[currentDisk].filesystem.children[targetName]) {
+                    console.error(`路径 ${path} 不存在`);
+                    return false;
+                }
+                
+                // 从根目录删除
+                delete disks[currentDisk].filesystem.children[targetName];
+                console.log(`已删除 ${path}`);
+                return true;
+            }
+            
+            // 常规情况 - 父目录是普通目录
+            if (parentInfo.node.type !== 'directory') {
+                console.error(`路径 ${path} 不存在`);
+                return false;
+            }
+            
+            const targetName = resolved.path[resolved.path.length - 1];
+            if (!parentInfo.node.children[targetName]) {
+                console.error(`路径 ${path} 不存在`);
+                return false;
+            }
+
+
+            delete parentInfo.node.children[targetName];
+            console.log(`已删除 ${path}`);
+            return true;
+        }
+
+
+        // 查看文件内容 - 纯文本显示，不添加任何样式
+        function cat(filename) {
+            const fileInfo = getNodeByPath(filename);
+            
+            if (!fileInfo || fileInfo.isRoot || fileInfo.node.type !== 'file') {
+                console.error(`文件 ${filename} 不存在`);
+                return null;
+            }
+
+
+            // 纯文本显示文件内容，保持命令行风格
+            console.log(`===== 文件 ${filename} 内容开始 =====`);
+            const lines = fileInfo.node.content.split('\n');
+            lines.forEach(line => console.log(line)); // 每行单独输出
+            console.log(`===== 文件 ${filename} 内容结束 =====`);
+            
+            return fileInfo.node.content;
+        }
+
+
+        // 导入文件夹 - ipj 命令
+        function importFolder() {
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.webkitdirectory = true;
+            input.multiple = false;
+            
+            input.onchange = async function(event) {
+                const files = event.target.files;
+                if (!files || files.length === 0) return;
+                
+                const currentDir = getNodeByPath('.');
+                if (!currentDir || currentDir.isRoot || currentDir.node.type !== 'directory') {
+                    console.error("当前目录不存在");
+                    return;
+                }
+                
+                // 获取基础文件夹名称
+                const baseFolderName = files[0].webkitRelativePath.split('/')[0];
+                
+                // 创建基础文件夹
+                if (!currentDir.node.children[baseFolderName]) {
+                    currentDir.node.children[baseFolderName] = {
+                        name: baseFolderName,
+                        type: 'directory',
+                        children: {}
+                    };
+                    console.log(`创建目录: ${baseFolderName}`);
+                }
+                
+                const baseDir = currentDir.node.children[baseFolderName];
+                
+                // 处理所有文件
+                for (const file of files) {
+                    try {
+                        const relativePath = file.webkitRelativePath;
+                        const pathParts = relativePath.split('/').slice(1); // 移除基础文件夹
+                        const fileName = pathParts.pop();
+                        
+                        // 创建中间目录
+                        let currentTargetDir = baseDir;
+                        for (const dirPart of pathParts) {
+                            if (!currentTargetDir.children[dirPart]) {
+                                currentTargetDir.children[dirPart] = {
+                                    name: dirPart,
+                                    type: 'directory',
+                                    children: {}
+                                };
+                                console.log(`创建目录: ${dirPart}`);
+                            }
+                            currentTargetDir = currentTargetDir.children[dirPart];
+                        }
+                        
+                        // 检查文件是否已存在
+                        if (currentTargetDir.children[fileName]) {
+                            console.warn(`文件 ${fileName} 已存在，已跳过`);
+                            continue;
+                        }
+                        
+                        // 读取文件内容
+                        const content = await file.text();
+                        
+                        // 创建文件
+                        currentTargetDir.children[fileName] = {
+                            name: fileName,
+                            type: 'file',
+                            content: content
+                        };
+                        
+                        console.log(`导入文件: ${relativePath}`);
+                    } catch (error) {
+                        console.error(`导入文件 ${file.name} 失败: ${error.message}`);
+                    }
+                }
+                
+                console.log(`文件夹 ${baseFolderName} 导入完成`);
+            };
+            
+            input.click();
+        }
+
+
+        // 导入文件 - ife 命令
+        function importFile() {
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.multiple = true;
+            
+            input.onchange = async function(event) {
+                const files = event.target.files;
+                if (!files || files.length === 0) return;
+                
+                const currentDir = getNodeByPath('.');
+                if (!currentDir || currentDir.isRoot || currentDir.node.type !== 'directory') {
+                    console.error("当前目录不存在");
+                    return;
+                }
+                
+                // 处理每个文件
+                for (const file of files) {
+                    try {
+                        const fileName = file.name;
+                        
+                        // 检查文件是否已存在
+                        if (currentDir.node.children[fileName]) {
+                            console.warn(`文件 ${fileName} 已存在，已跳过`);
+                            continue;
+                        }
+                        
+                        // 读取文件内容
+                        const content = await file.text();
+                        
+                        // 创建文件
+                        currentDir.node.children[fileName] = {
+                            name: fileName,
+                            type: 'file',
+                            content: content
+                        };
+                        
+                        console.log(`导入文件: ${fileName}`);
+                    } catch (error) {
+                        console.error(`导入文件 ${file.name} 失败: ${error.message}`);
+                    }
+                }
+                
+                console.log("文件导入完成");
+            };
+            
+            input.click();
+        }
+
+
+        // 导出磁盘为.dk - odk 命令
+        async function exportAsDk(filename = null) {
+            // 生成默认文件名: disk:时间戳(精确到秒).dk
+            if (!filename) {
+                const timestamp = Math.floor(Date.now() / 1000);
+                filename = `disk:${timestamp}.dk`;
+            } else if (!filename.endsWith('.dk')) {
+                filename += '.dk';
+            }
+
+
+            try {
+                const zip = new JSZip();
+                zip.file('filesystem.json', JSON.stringify(disks[currentDisk].filesystem));
+                
+                const content = await zip.generateAsync({ type: "blob" });
+                const a = document.createElement("a");
+                a.href = URL.createObjectURL(content);
+                a.download = filename;
+                a.click();
+                
+                console.log(`磁盘 ${currentDisk} 已导出为 ${filename}`);
+                return true;
+            } catch (error) {
+                console.error(`导出失败: ${error.message}`);
+                return false;
+            }
+        }
+
+
+        // 运行程序或脚本 - 修复根目录文件运行问题和JavaScript执行问题
+        function run(path) {
+            // 修复：支持根目录文件运行，处理绝对路径
+            let resolvedPath = path;
+            if (!path.startsWith('/')) {
+                // 如果是相对路径，尝试从当前目录和根目录都查找
+                const rootPath = `/${path}`;
+                const rootFileInfo = getNodeByPath(rootPath);
+                if (rootFileInfo && !rootFileInfo.isRoot && rootFileInfo.node.type === 'file') {
+                    resolvedPath = rootPath;
+                }
+            }
+            
+            const fileInfo = getNodeByPath(resolvedPath);
+            
+            if (!fileInfo || fileInfo.isRoot || fileInfo.node.type !== 'file') {
+                console.error(`文件 ${path} 不存在`);
+                return false;
+            }
+            
+            const fileName = fileInfo.node.name;
+            
+            try {
+                const content = fileInfo.node.content;
+                
+                // 创建执行环境
+                const executionContext = {
+                    console: console,
+                    import: function(modulePath) {
+                        // 实现简单的导入功能
+                        const imported = getNodeByPath(modulePath);
+                        if (!imported || imported.isRoot || imported.node.type !== 'file') {
+                            throw new Error(`无法导入 ${modulePath}: 文件不存在`);
+                        }
+                        
+                        // 执行导入的文件并返回其导出对象
+                        const moduleContent = imported.node.content;
+                        const moduleExports = {};
+                        const moduleFunction = new Function('exports', 'console', 'CommandManager', moduleContent);
+                        moduleFunction(moduleExports, console, CommandManager);
+                        return moduleExports;
+                    },
+                    CommandManager: CommandManager // 暴露命令管理器
+                };
+                
+                // 根据文件类型执行
+                if (fileName.endsWith('.js')) {
+                    // 执行JavaScript程序 - 修复：简化参数绑定
+                    // 只绑定console参数，避免未使用import时的错误
+                    const programFunction = new Function('console', 'CommandManager', content);
+                    programFunction(console, CommandManager);
+                } else if (fileName.endsWith('.r')) {
+                    // 执行r脚本
+                    // 简单的r语法转换为JavaScript
+                    const jsCode = content
+                        .replace(/print\((.*?)\)/g, 'console.log($1)')
+                        .replace(/load\((.*?)\)/g, 'const module = import($1)');
+                    
+                    const scriptFunction = new Function('console', 'import', 'CommandManager', jsCode);
+                    scriptFunction(console, executionContext.import, CommandManager);
+                } else {
+                    console.error("仅支持运行 .js 程序和 .r 脚本");
+                    return false;
+                }
+                
+            } catch (error) {
+                console.error(`运行 ${fileName} 失败: ${error.message}`);
+            }
+            
+            return true;
+        }
+
+
+        // 新增：直接执行JavaScript代码的命令
+        function executeJavaScript(code) {
+            try {
+                // 创建一个安全的执行环境，包含CommandManager
+                const result = new Function('console', 'CommandManager', 'return ' + code)(console, CommandManager);
+                if (result !== undefined) {
+                    console.log("结果:", result);
+                }
+            } catch (error) {
+                console.error("JavaScript执行错误:", error.message);
+            }
+        }
+
+
+        // 下载命令 - dd url [path] - 支持真实下载
+        function dd(url, savePath = null) {
+            // 解析文件名
+            let fileName = url.split('/').pop().split('?')[0];
+            if (!fileName) {
+                fileName = `download_${Date.now()}`;
+            }
+            
+            // 默认保存到downloads目录
+            if (!savePath) {
+                savePath = `downloads/${fileName}`;
+            }
+            
+            // 检查保存目录是否存在
+            const savePathParts = savePath.split('/');
+            const fileNamePart = savePathParts.pop();
+            const dirPath = savePathParts.join('/') || '.';
+            
+            const dirInfo = getNodeByPath(dirPath);
+            if (!dirInfo || dirInfo.isRoot || dirInfo.node.type !== 'directory') {
+                console.error(`保存目录 ${dirPath} 不存在`);
+                return false;
+            }
+            
+            // 检查文件是否已存在
+            if (dirInfo.node.children[fileNamePart]) {
+                console.warn(`文件 ${fileNamePart} 已存在，将覆盖`);
+            }
+            
+            // 创建下载任务
+            const taskId = nextTaskId++;
+            const task = {
+                id: taskId,
+                url: url,
+                fileName: fileNamePart,
+                savePath: savePath,
+                status: 'downloading', // downloading, paused, complete, failed
+                progress: 0,
+                totalSize: 0,
+                downloadedSize: 0,
+                startTime: new Date(),
+                xhr: null,
+                interval: null
+            };
+            
+            downloadTasks.push(task);
+            
+            // 创建真实的下载请求
+            const xhr = new XMLHttpRequest();
+            task.xhr = xhr;
+            
+            xhr.open('GET', url, true);
+            xhr.responseType = 'blob';
+            
+            // 监听进度事件
+            xhr.addEventListener('progress', function(e) {
+                if (e.lengthComputable) {
+                    task.totalSize = e.total;
+                    task.downloadedSize = e.loaded;
+                    task.progress = (e.loaded / e.total) * 100;
+                    updateDownloadDisplay();
+                }
+            });
+            
+            // 监听请求完成
+            xhr.addEventListener('load', function() {
+                if (xhr.status === 200) {
+                    task.progress = 100;
+                    task.downloadedSize = task.totalSize;
+                    task.status = 'complete';
+                    
+                    // 读取下载的内容
+                    const reader = new FileReader();
+                    reader.onload = function() {
+                        // 将内容保存到文件系统
+                        dirInfo.node.children[fileNamePart] = {
+                            name: fileNamePart,
+                            type: 'file',
+                            content: reader.result, // 保存文件内容
+                            size: task.totalSize,
+                            downloaded: true
+                        };
+                        
+                        infoLog(`下载完成: ${task.fileName} (${formatFileSize(task.totalSize)})`);
+                    };
+                    reader.readAsText(xhr.response); // 以文本形式读取所有文件
+                } else {
+                    task.status = 'failed';
+                    console.error(`下载失败: 服务器返回状态码 ${xhr.status}`);
+                }
+                
+                clearInterval(task.interval);
+                updateDownloadDisplay();
+            });
+            
+            // 监听错误
+            xhr.addEventListener('error', function() {
+                task.status = 'failed';
+                clearInterval(task.interval);
+                console.error(`下载失败: 网络错误`);
+                updateDownloadDisplay();
+            });
+            
+            // 监听abort
+            xhr.addEventListener('abort', function() {
+                task.status = 'paused';
+                clearInterval(task.interval);
+                console.log(`下载已暂停: ${task.fileName}`);
+                updateDownloadDisplay();
+            });
+            
+            // 开始下载
+            xhr.send();
+            
+            // 启动进度更新计时器（处理不可计算长度的情况）
+            task.interval = setInterval(() => {
+                if (task.status !== 'downloading') return;
+                
+                // 如果无法计算总长度，模拟进度增加
+                if (task.totalSize === 0) {
+                    task.downloadedSize += 1024 * 10; // 每次增加10KB
+                    task.progress = Math.min(task.progress + 0.5, 99); // 最多到99%
+                    updateDownloadDisplay();
+                }
+            }, 500);
+            
+            console.log(`开始下载 [${taskId}]: ${url}`);
+            console.log(`保存路径: ${savePath}`);
+            return true;
+        }
+
+
+        // 更新下载任务显示 - 使用纯文本进度条
+        function updateDownloadDisplay() {
+            // 找到所有下载列表元素并更新
+            const downloadDisplays = outputDiv.querySelectorAll('.download-task-display');
+            if (downloadDisplays.length > 0) {
+                // 移除旧显示
+                downloadDisplays.forEach(display => {
+                    display.parentNode.removeChild(display);
+                });
+            }
+            
+            // 如果有任务，重新显示
+            if (downloadTasks.length > 0) {
+                dlist();
+            }
+        }
+
+
+        // 显示下载列表 - dlist
+        function dlist() {
+            if (downloadTasks.length === 0) {
+                console.log("没有下载任务");
+                return true;
+            }
+            
+            // 创建下载列表容器
+            const container = document.createElement('div');
+            container.className = 'download-task-display log';
+            
+            // 添加标题
+            const title = document.createElement('p');
+            title.textContent = "下载任务列表:";
+            container.appendChild(title);
+            
+            // 计算列宽，确保百分比单独一栏且自适应，增加列间距
+            const columnSpacing = 4; // 列之间的空格数
+            const maxIdLength = Math.max(...downloadTasks.map(t => t.id.toString().length), 2);
+            const statusWidth = 10; // 状态列宽度增加
+            const progressBarWidth = 20; // 进度条固定20个字符
+            const percentWidth = 8; // 百分比列宽度增加
+            const sizeWidth = 18; // 大小列宽度增加
+            
+            // 显示列标题，添加额外空格增加间距
+            const header = document.createElement('p');
+            header.textContent = `ID${' '.repeat(maxIdLength - 2 + columnSpacing)}状态${' '.repeat(statusWidth - 2 + columnSpacing)}进度${' '.repeat(progressBarWidth - 2 + columnSpacing)}百分比${' '.repeat(percentWidth - 2 + columnSpacing)}大小${' '.repeat(sizeWidth - 2 + columnSpacing)}文件名`;
+            container.appendChild(header);
+            
+            // 显示每个任务
+            downloadTasks.forEach(task => {
+                let status = task.status.padEnd(statusWidth); // 固定宽度
+                
+                // 文本进度条
+                const barLength = progressBarWidth;
+                const filledLength = Math.round((task.progress / 100) * barLength);
+                const emptyLength = barLength - filledLength;
+                const progressBar = repeatChar('█', filledLength) + repeatChar('-', emptyLength);
+                
+                // 百分比 - 单独一栏
+                const percent = `${task.progress.toFixed(1)}%`.padEnd(percentWidth);
+                
+                // 格式化大小
+                const sizeStr = task.totalSize > 0 
+                    ? `${formatFileSize(task.downloadedSize)}/${formatFileSize(task.totalSize)}`
+                    : `${formatFileSize(task.downloadedSize)}`;
+                const sizeStrPadded = sizeStr.padEnd(sizeWidth);
+                
+                // 任务ID
+                const idStr = task.id.toString().padEnd(maxIdLength);
+                
+                // 任务行，添加额外空格增加列间距
+                const taskLine = document.createElement('p');
+                taskLine.textContent = `${idStr}${' '.repeat(columnSpacing)}${status}${' '.repeat(columnSpacing)}${progressBar}${' '.repeat(columnSpacing)}${percent}${' '.repeat(columnSpacing)}${sizeStrPadded}${' '.repeat(columnSpacing)}${task.fileName}`;
+                container.appendChild(taskLine);
+            });
+            
+            outputDiv.appendChild(container);
+            scrollToBottom();
+            return true;
+        }
+
+
+        // 停止下载 - dstop [id]
+        function dstop(taskId = null) {
+            if (downloadTasks.length === 0) {
+                console.log("没有下载任务可停止");
+                return true;
+            }
+            
+            // 停止所有下载
+            if (taskId === null) {
+                let stoppedCount = 0;
+                downloadTasks.forEach(task => {
+                    if (task.status === 'downloading') {
+                        task.status = 'paused';
+                        if (task.xhr) task.xhr.abort();
+                        if (task.interval) clearInterval(task.interval);
+                        stoppedCount++;
+                    }
+                });
+                console.log(`已停止 ${stoppedCount} 个下载任务`);
+            } else {
+                // 停止指定下载
+                const task = downloadTasks.find(t => t.id === parseInt(taskId));
+                if (!task) {
+                    console.error(`下载任务 ${taskId} 不存在`);
+                    return false;
+                }
+                
+                if (task.status === 'downloading') {
+                    task.status = 'paused';
+                    if (task.xhr) task.xhr.abort();
+                    if (task.interval) clearInterval(task.interval);
+                    console.log(`已停止下载任务 ${taskId}: ${task.fileName}`);
+                } else {
+                    console.warn(`下载任务 ${taskId} 不在下载中 (当前状态: ${task.status})`);
+                }
+            }
+            
+            // 更新显示
+            updateDownloadDisplay();
+            return true;
+        }
+
+
+        // 开始下载 - dstart [id]
+        function dstart(taskId = null) {
+            if (downloadTasks.length === 0) {
+                console.log("没有下载任务可开始");
+                return true;
+            }
+            
+            // 开始所有暂停的下载
+            if (taskId === null) {
+                let startedCount = 0;
+                downloadTasks.forEach(task => {
+                    if (task.status === 'paused') {
+                        // 重新创建XHR对象
+                        const xhr = new XMLHttpRequest();
+                        task.xhr = xhr;
+                        task.status = 'downloading';
+                        
+                        xhr.open('GET', task.url, true);
+                        xhr.responseType = 'blob';
+                        
+                        // 恢复进度事件监听
+                        xhr.addEventListener('progress', function(e) {
+                            if (e.lengthComputable) {
+                                task.totalSize = e.total;
+                                task.downloadedSize = e.loaded;
+                                task.progress = (e.loaded / e.total) * 100;
+                                updateDownloadDisplay();
+                            }
+                        });
+                        
+                        // 恢复完成事件
+                        xhr.addEventListener('load', function() {
+                            if (xhr.status === 200) {
+                                task.progress = 100;
+                                task.downloadedSize = task.totalSize;
+                                task.status = 'complete';
+                                
+                                // 读取下载的内容
+                                const reader = new FileReader();
+                                reader.onload = function() {
+                                    // 将内容保存到文件系统
+                                    const savePathParts = task.savePath.split('/');
+                                    const fileNamePart = savePathParts.pop();
+                                    const dirPath = savePathParts.join('/') || '.';
+                                    const dirInfo = getNodeByPath(dirPath);
+                                    
+                                    if (dirInfo && !dirInfo.isRoot && dirInfo.node.type === 'directory') {
+                                        dirInfo.node.children[fileNamePart] = {
+                                            name: fileNamePart,
+                                            type: 'file',
+                                            content: reader.result,
+                                            size: task.totalSize,
+                                            downloaded: true
+                                        };
+                                    }
+                                    
+                                    infoLog(`下载完成: ${task.fileName} (${formatFileSize(task.totalSize)})`);
+                                };
+                                reader.readAsText(xhr.response);
+                            } else {
+                                task.status = 'failed';
+                                console.error(`下载失败: 服务器返回状态码 ${xhr.status}`);
+                            }
+                            
+                            clearInterval(task.interval);
+                            updateDownloadDisplay();
+                        });
+                        
+                        // 恢复错误事件
+                        xhr.addEventListener('error', function() {
+                            task.status = 'failed';
+                            clearInterval(task.interval);
+                            console.error(`下载失败: 网络错误`);
+                            updateDownloadDisplay();
+                        });
+                        
+                        // 恢复abort事件
+                        xhr.addEventListener('abort', function() {
+                            task.status = 'paused';
+                            clearInterval(task.interval);
+                            console.log(`下载已暂停: ${task.fileName}`);
+                            updateDownloadDisplay();
+                        });
+                        
+                        // 启动进度更新计时器
+                        task.interval = setInterval(() => {
+                            if (task.status !== 'downloading') return;
+                            
+                            // 如果无法计算总长度，模拟进度增加
+                            if (task.totalSize === 0) {
+                                task.downloadedSize += 1024 * 10;
+                                task.progress = Math.min(task.progress + 0.5, 99);
+                                updateDownloadDisplay();
+                            }
+                        }, 500);
+                        
+                        xhr.send();
+                        startedCount++;
+                    }
+                });
+                console.log(`已开始 ${startedCount} 个下载任务`);
+            } else {
+                // 开始指定下载
+                const task = downloadTasks.find(t => t.id === parseInt(taskId));
+                if (!task) {
+                    console.error(`下载任务 ${taskId} 不存在`);
+                    return false;
+                }
+                
+                if (task.status === 'paused') {
+                    // 重新创建XHR对象
+                    const xhr = new XMLHttpRequest();
+                    task.xhr = xhr;
+                    task.status = 'downloading';
+                    
+                    xhr.open('GET', task.url, true);
+                    xhr.responseType = 'blob';
+                    
+                    // 恢复进度事件监听
+                    xhr.addEventListener('progress', function(e) {
+                        if (e.lengthComputable) {
+                            task.totalSize = e.total;
+                            task.downloadedSize = e.loaded;
+                            task.progress = (e.loaded / e.total) * 100;
+                            updateDownloadDisplay();
+                        }
+                    });
+                    
+                    // 恢复完成事件
+                    xhr.addEventListener('load', function() {
+                        if (xhr.status === 200) {
+                            task.progress = 100;
+                            task.downloadedSize = task.totalSize;
+                            task.status = 'complete';
+                            
+                            // 读取下载的内容
+                            const reader = new FileReader();
+                            reader.onload = function() {
+                                // 将内容保存到文件系统
+                                const savePathParts = task.savePath.split('/');
+                                const fileNamePart = savePathParts.pop();
+                                const dirPath = savePathParts.join('/') || '.';
+                                const dirInfo = getNodeByPath(dirPath);
+                                
+                                if (dirInfo && !dirInfo.isRoot && dirInfo.node.type === 'directory') {
+                                    dirInfo.node.children[fileNamePart] = {
+                                        name: fileNamePart,
+                                        type: 'file',
+                                        content: reader.result,
+                                        size: task.totalSize,
+                                        downloaded: true
+                                    };
+                                }
+                                
+                                infoLog(`下载完成: ${task.fileName} (${formatFileSize(task.totalSize)})`);
+                            };
+                            reader.readAsText(xhr.response);
+                        } else {
+                            task.status = 'failed';
+                            console.error(`下载失败: 服务器返回状态码 ${xhr.status}`);
+                        }
+                        
+                        clearInterval(task.interval);
+                        updateDownloadDisplay();
+                    });
+                    
+                    // 恢复错误事件
+                    xhr.addEventListener('error', function() {
+                        task.status = 'failed';
+                        clearInterval(task.interval);
+                        console.error(`下载失败: 网络错误`);
+                        updateDownloadDisplay();
+                    });
+                    
+                    // 恢复abort事件
+                    xhr.addEventListener('abort', function() {
+                        task.status = 'paused';
+                        clearInterval(task.interval);
+                        console.log(`下载已暂停: ${task.fileName}`);
+                        updateDownloadDisplay();
+                    });
+                    
+                    // 启动进度更新计时器
+                    task.interval = setInterval(() => {
+                        if (task.status !== 'downloading') return;
+                        
+                        // 如果无法计算总长度，模拟进度增加
+                        if (task.totalSize === 0) {
+                            task.downloadedSize += 1024 * 10;
+                            task.progress = Math.min(task.progress + 0.5, 99);
+                            updateDownloadDisplay();
+                        }
+                    }, 500);
+                    
+                    xhr.send();
+                    console.log(`已开始下载任务 ${taskId}: ${task.fileName}`);
+                } else if (task.status === 'downloading') {
+                    console.warn(`下载任务 ${taskId} 已经在下载中`);
+                } else {
+                    console.warn(`下载任务 ${taskId} 无法开始 (当前状态: ${task.status})`);
+                }
+            }
+            
+            // 更新显示
+            updateDownloadDisplay();
+            return true;
+        }
+
+
+        // 删除下载任务 - drm [id]
+        function drm(taskId = null) {
+            if (downloadTasks.length === 0) {
+                console.log("没有下载任务可删除");
+                return true;
+            }
+            
+            // 删除所有下载任务
+            if (taskId === null) {
+                // 清除所有XHR和定时器
+                downloadTasks.forEach(task => {
+                    if (task.xhr) task.xhr.abort();
+                    if (task.interval) clearInterval(task.interval);
+                });
+                
+                const count = downloadTasks.length;
+                downloadTasks = [];
+                console.log(`已删除所有 ${count} 个下载任务`);
+            } else {
+                // 删除指定下载任务
+                const taskIndex = downloadTasks.findIndex(t => t.id === parseInt(taskId));
+                if (taskIndex === -1) {
+                    console.error(`下载任务 ${taskId} 不存在`);
+                    return false;
+                }
+                
+                // 清除XHR和定时器
+                if (downloadTasks[taskIndex].xhr) {
+                    downloadTasks[taskIndex].xhr.abort();
+                }
+                if (downloadTasks[taskIndex].interval) {
+                    clearInterval(downloadTasks[taskIndex].interval);
+                }
+                
+                const task = downloadTasks.splice(taskIndex, 1)[0];
+                console.log(`已删除下载任务 ${taskId}: ${task.fileName}`);
+            }
+            
+            // 更新显示
+            updateDownloadDisplay();
+            return true;
+        }
+
+
+        // 清除已完成的下载任务 - dlsc
+        function dlsc() {
+            if (downloadTasks.length === 0) {
+                console.log("没有下载任务");
+                return true;
+            }
+            
+            // 保存非完成状态的任务
+            const incompleteTasks = [];
+            let removedCount = 0;
+            
+            downloadTasks.forEach(task => {
+                if (task.status === 'complete') {
+                    // 清除定时器
+                    if (task.interval) clearInterval(task.interval);
+                    removedCount++;
+                } else {
+                    incompleteTasks.push(task);
+                }
+            });
+            
+            downloadTasks = incompleteTasks;
+            console.log(`已清除 ${removedCount} 个已完成的下载任务`);
+            
+            // 更新显示
+            updateDownloadDisplay();
+            return true;
+        }
+
+
+        // 移动文件/目录
+        function mv(sourcePath, destPath) {
+            // 获取源节点信息
+            const sourceInfo = getNodeByPath(sourcePath);
+            if (!sourceInfo || sourceInfo.isRoot) {
+                console.error(`源路径 ${sourcePath} 不存在`);
+                return false;
+            }
+            
+            // 获取目标目录信息
+            const destInfo = getNodeByPath(destPath);
+            
+            // 如果目标路径不存在，尝试解析为目录+文件名
+            let destDirInfo, destName;
+            if (!destInfo) {
+                // 拆分目标路径为目录和文件名
+                const destParts = destPath.split('/');
+                destName = destParts.pop();
+                const destDirPath = destParts.join('/') || '.';
+                destDirInfo = getNodeByPath(destDirPath);
+                
+                if (!destDirInfo || destDirInfo.isRoot || destDirInfo.node.type !== 'directory') {
+                    console.error(`目标目录 ${destDirPath} 不存在`);
+                    return false;
+                }
+            } else {
+                // 如果目标是目录，使用源文件名
+                if (destInfo.node.type === 'directory') {
+                    destDirInfo = destInfo;
+                    destName = sourceInfo.node.name;
+                } else {
+                    // 如果目标是文件，使用其路径
+                    const destParts = destPath.split('/');
+                    destName = destParts.pop();
+                    const destDirPath = destParts.join('/') || '.';
+                    destDirInfo = getNodeByPath(destDirPath);
+                    
+                    if (!destDirInfo || destDirInfo.isRoot || destDirInfo.node.type !== 'directory') {
+                        console.error(`目标目录 ${destDirPath} 不存在`);
+                        return false;
+                    }
+                }
+            }
+            
+            // 检查目标位置是否已存在同名文件/目录
+            if (destDirInfo.node.children[destName]) {
+                console.error(`目标位置已存在 ${destName}`);
+                return false;
+            }
+            
+            // 获取源文件的父目录 - 修复：处理根目录情况
+            const sourcePathParts = resolvePath(sourcePath).path;
+            const sourceName = sourcePathParts[sourcePathParts.length - 1];
+            
+            // 特殊处理根目录下的文件/目录
+            let sourceParentInfo, sourceParentNode;
+            if (sourcePathParts.length === 2) {  // 根目录下的项目路径长度为2: ['/', 'item']
+                sourceParentNode = disks[currentDisk].filesystem;
+                sourceParentInfo = { node: sourceParentNode };
+            } else {
+                const sourceParentPath = sourcePathParts.slice(0, -1).join('/') || '.';
+                sourceParentInfo = getNodeByPath(sourceParentPath);
+                
+                if (!sourceParentInfo || sourceParentInfo.isRoot || sourceParentInfo.node.type !== 'directory') {
+                    console.error("无法找到源文件的父目录");
+                    return false;
+                }
+                sourceParentNode = sourceParentInfo.node;
+            }
+            
+            // 执行移动操作（深度复制）
+            function deepCopyNode(node, newName) {
+                const copy = JSON.parse(JSON.stringify(node));
+                copy.name = newName;
+                return copy;
+            }
+            
+            destDirInfo.node.children[destName] = deepCopyNode(sourceInfo.node, destName);
+            
+            // 删除原节点
+            delete sourceParentNode.children[sourceName];
+            
+            // 统计移动的项目数量
+            let itemCount = 0;
+            function countItems(node) {
+                itemCount++;
+                if (node.type === 'directory') {
+                    Object.values(node.children).forEach(child => countItems(child));
+                }
+            }
+            countItems(sourceInfo.node);
+            
+            console.log(`已将 ${sourcePath} 移动到 ${destPath}，共移动 ${itemCount} 个项目`);
+            return true;
+        }
+
+
+        // 复制文件/目录 - cp path1 path2
+        function cp(sourcePath, destPath) {
+            // 获取源节点信息
+            const sourceInfo = getNodeByPath(sourcePath);
+            if (!sourceInfo || sourceInfo.isRoot) {
+                console.error(`源路径 ${sourcePath} 不存在`);
+                return false;
+            }
+            
+            // 获取目标目录信息
+            const destInfo = getNodeByPath(destPath);
+            
+            // 如果目标路径不存在，尝试解析为目录+文件名
+            let destDirInfo, destName;
+            if (!destInfo) {
+                // 拆分目标路径为目录和文件名
+                const destParts = destPath.split('/');
+                destName = destParts.pop();
+                const destDirPath = destParts.join('/') || '.';
+                destDirInfo = getNodeByPath(destDirPath);
+                
+                if (!destDirInfo || destDirInfo.isRoot || destDirInfo.node.type !== 'directory') {
+                    console.error(`目标目录 ${destDirPath} 不存在`);
+                    return false;
+                }
+            } else {
+                // 如果目标是目录，使用源文件名
+                if (destInfo.node.type === 'directory') {
+                    destDirInfo = destInfo;
+                    destName = sourceInfo.node.name;
+                } else {
+                    // 如果目标是文件，使用其路径
+                    const destParts = destPath.split('/');
+                    destName = destParts.pop();
+                    const destDirPath = destParts.join('/') || '.';
+                    destDirInfo = getNodeByPath(destDirPath);
+                    
+                    if (!destDirInfo || destDirInfo.isRoot || destDirInfo.node.type !== 'directory') {
+                        console.error(`目标目录 ${destDirPath} 不存在`);
+                        return false;
+                    }
+                }
+            }
+            
+            // 检查目标位置是否已存在同名文件/目录
+            if (destDirInfo.node.children[destName]) {
+                console.error(`目标位置已存在 ${destName}，无法复制`);
+                return false;
+            }
+            
+            // 执行复制操作（深度复制）
+            function deepCopyNode(node, newName) {
+                const copy = JSON.parse(JSON.stringify(node));
+                copy.name = newName;
+                return copy;
+            }
+            
+            destDirInfo.node.children[destName] = deepCopyNode(sourceInfo.node, destName);
+            
+            // 统计复制的项目数量
+            let itemCount = 0;
+            function countItems(node) {
+                itemCount++;
+                if (node.type === 'directory') {
+                    Object.values(node.children).forEach(child => countItems(child));
+                }
+            }
+            countItems(sourceInfo.node);
+            
+            console.log(`已将 ${sourcePath} 复制到 ${destPath}，共复制 ${itemCount} 个项目`);
+            return true;
+        }
+
+
+        // 格式化文件大小
+        function formatFileSize(bytes) {
+            if (bytes < 1024) return bytes + ' B';
+            else if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+            else return (bytes / 1048576).toFixed(1) + ' MB';
+        }
+
+
+        // 命令管理相关命令实现
+        function registerCommand(args) {
+            if (args.length < 2) {
+                console.error("使用方法: registercmd <命令名> <JavaScript函数> [描述]");
+                console.error("示例: registercmd hello 'function(args){console.log(\"Hello World!\")}' '显示问候语'");
+                return false;
+            }
+            
+            const cmdName = args[0];
+            const functionCode = args[1];
+            const description = args.slice(2).join(' ') || '';
+            
+            try {
+                // 创建函数
+                const func = new Function('return ' + functionCode)();
+                
+                // 注册命令
+                return CommandManager.register(cmdName, func, description);
+            } catch (error) {
+                console.error(`注册命令失败: 函数解析错误 - ${error.message}`);
+                return false;
+            }
+        }
+        
+        function unregisterCommand(args) {
+            if (args.length !== 1) {
+                console.error("使用方法: unregistercmd <命令名>");
+                return false;
+            }
+            
+            return CommandManager.unregister(args[0]);
+        }
+        
+        function listCommands(args) {
+            // 默认为只显示自定义命令
+            let showSystem = false;
+            let showCustom = true;
+            
+            if (args.length > 0 && args[0] === '-a') {
+                showSystem = true;
+            }
+            
+            CommandManager.list(showSystem, showCustom);
+            return true;
+        }
+
+
+        // 帮助命令 - 新增自定义命令相关说明
+        function showHelp() {
+            console.log("=== BlockOS 命令帮助 ===");
+            console.log("文件类型说明:");
+            console.log("  .js - 程序文件（主要执行文件）");
+            console.log("  .r  - 脚本文件（辅助脚本）");
+            
+            console.log("\n文件系统命令:");
+            console.log("  ls                - 查看当前挂载磁盘的当前目录内容");
+            console.log("  tree              - 显示当前挂载磁盘的完整树形结构");
+            console.log("  cd <路径>         - 切换到当前磁盘中的指定目录");
+            console.log("  mkdir <目录名>    - 创建目录");
+            console.log("  touch <文件名>    - 创建文件");
+            console.log("  rm <路径>         - 删除文件或目录");
+            console.log("  cat <文件名>      - 查看文件内容");
+            console.log("  mv <源路径> <目标路径> - 移动文件或目录（包括所有子内容）");
+            console.log("  cp <源路径> <目标路径> - 复制文件或目录（包括所有子内容）");
+            
+            console.log("\n导入导出命令:");
+            console.log("  ipj               - 导入文件夹到当前目录");
+            console.log("  ife               - 导入文件到当前目录");
+            console.log("  odk [文件名]      - 导出当前磁盘为.dk文件");
+            
+            console.log("\n下载管理:");
+            console.log("  dd <url> [保存路径] - 下载文件，url为必填，保存路径可选");
+            console.log("  dlist             - 查看所有下载任务及进度");
+            console.log("  dstop [任务ID]     - 停止指定下载任务，无ID则停止所有");
+            console.log("  dstart [任务ID]    - 开始指定下载任务，无ID则开始所有");
+            console.log("  drm [任务ID]       - 删除指定下载任务，无ID则删除所有");
+            console.log("  dlsc              - 清除所有已完成的下载任务");
+            
+            console.log("\n磁盘管理:");
+            console.log("  lsd               - 查看所有已挂载的磁盘");
+            console.log("  ld <磁盘名>        - 切换到指定磁盘");
+            console.log("  mount             - 挂载磁盘文件(.dk)");
+            console.log("  unmount <磁盘名>   - 卸载磁盘");
+            
+            console.log("\n程序运行:");
+            console.log("  run <文件名>      - 运行.js程序或.r脚本");
+            console.log("  js <代码>            - 直接执行JavaScript代码，例如: js console.log('hello')");
+            
+            console.log("\n命令管理:");
+            console.log("  registercmd <命令名> <函数> [描述] - 注册自定义命令");
+            console.log("  unregistercmd <命令名> - 注销自定义命令");
+            console.log("  listcmds [-a]     - 列出所有命令，-a参数显示系统命令");
+            
+            console.log("\n文本编辑:");
+            console.log("  ve open <文件名>   - 打开文件进行编辑");
+            console.log("  ve move left/right [数量] - 移动光标（默认1格）");
+            console.log("  ve line <行号>     - 将光标移动到指定行");
+            console.log("  ve break           - 在光标位置换行");
+            console.log("  ve write <内容>    - 在光标前写入内容");
+            console.log("  ve del [参数]      - 删除字符或范围");
+            console.log("  ve copy [参数]     - 复制内容");
+            console.log("  ve paste [参数]    - 粘贴内容");
+            console.log("  ve q               - 退出编辑器（不保存）");
+            console.log("  ve s               - 保存文件");
+            console.log("  ve qs              - 保存并退出");
+            
+            console.log("\n其他命令:");
+            console.log("  clear             - 清空屏幕");
+            console.log("  help              - 显示此帮助信息");
+        }
+
+
+        function clearScreen() {
+            outputDiv.innerHTML = '';
+            console.log("屏幕已清除");
+            return true;
+        }
+
+
+        // 挂载磁盘
+        function mount() {
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = '.dk';
+            
+            input.onchange = async function(event) {
+                const file = event.target.files[0];
+                if (!file) return;
+                
+                if (!file.name.endsWith('.dk')) {
+                    console.error("请导入 .dk 格式的磁盘文件");
+                    return;
+                }
+                
+                let baseName = 'disk';
+                let diskName = baseName;
+                let counter = 1;
+                
+                while (disks[diskName]) {
+                    diskName = `${baseName}${counter}`;
+                    counter++;
+                }
+                
+                try {
+                    const zip = await JSZip.loadAsync(file);
+                    const fsFile = zip.file('filesystem.json');
+                    
+                    if (!fsFile) {
+                        console.error("无效的磁盘文件");
+                        return;
+                    }
+                    
+                    const fsContent = await fsFile.async('string');
+                    const filesystem = JSON.parse(fsContent);
+                    
+                    disks[diskName] = {
+                        name: diskName,
+                        filesystem: filesystem
+                    };
+                    
+                    console.log(`磁盘 ${diskName} 挂载成功`);
+                    lsd();
+                } catch (error) {
+                    console.error(`挂载失败: ${error.message}`);
+                }
+            };
+            
+            input.click();
+        }
+
+
+        // 卸载磁盘
+        function unmount(diskName) {
+            if (diskName === 'disk') {
+                console.error("系统磁盘不能卸载");
+                return false;
+            }
+            
+            if (!disks[diskName]) {
+                console.error(`磁盘 ${diskName} 不存在`);
+                return false;
+            }
+            
+            if (diskName === currentDisk) {
+                currentDisk = 'disk';
+                currentPath = ['/'];
+                updateCurrentPath();
+                console.log(`已自动切换到系统磁盘`);
+            }
+            
+            delete disks[diskName];
+            console.log(`磁盘 ${diskName} 已卸载`);
+            return true;
+        }
+
+
+        // ve编辑器实现 - 集成到BlockOS中作为系统命令
+        const veEditor = {
+            // 编辑器状态
+            state: {
+                isActive: false,         // 编辑器是否激活
+                currentFile: null,       // 当前编辑的文件
+                content: [],             // 文件内容行数组
+                cursor: {
+                    row: 0,              // 光标行号（0-based）
+                    col: 0               // 光标列号（0-based）
+                },
+                clipboard: '',           // 剪贴板内容
+                originalConsole: null    // 保存原始控制台方法
+            },
+
+            // 初始化编辑器
+            init: function() {
+                // 编辑器已集成到系统命令中，无需额外注册
+            },
+
+            // 处理ve命令
+            handleCommand: function(args) {
+                if (args.length === 0) {
+                    this.showHelp();
+                    return;
+                }
+
+                const subCmd = args[0].toLowerCase();
+                const subArgs = args.slice(1);
+
+                // 处理需要编辑器激活的命令
+                if (!this.state.isActive && !['open', 'help'].includes(subCmd)) {
+                    console.error('请先使用 ve open <文件名> 打开一个文件');
+                    return;
+                }
+
+                switch (subCmd) {
+                    case 'open':
+                        this.handleOpen(subArgs);
+                        break;
+                    case 'move':
+                        this.handleMove(subArgs);
+                        break;
+                    case 'line':
+                        this.handleLine(subArgs);
+                        break;
+                    case 'break':
+                        this.handleBreak();
+                        break;
+                    case 'write':
+                        this.handleWrite(subArgs);
+                        break;
+                    case 'del':
+                        this.handleDelete(subArgs);
+                        break;
+                    case 'copy':
+                        this.handleCopy(subArgs);
+                        break;
+                    case 'paste':
+                        this.handlePaste(subArgs);
+                        break;
+                    case 'q':
+                        this.handleQuit(false);
+                        break;
+                    case 's':
+                        this.handleSave();
+                        break;
+                    case 'qs':
+                        this.handleSave();
+                        this.handleQuit(true);
+                        break;
+                    case 'help':
+                        this.showHelp();
+                        break;
+                    default:
+                        console.error(`未知的ve子命令: ${subCmd}`);
+                        this.showHelp();
+                }
+            },
+
+            // 显示帮助信息
+            showHelp: function() {
+                console.log('=== ve编辑器命令帮助 ===');
+                console.log('ve open <文件名>         - 打开文件进行编辑');
+                console.log('ve move left/right [数量] - 移动光标（默认1格）');
+                console.log('ve line <行号>           - 将光标移动到指定行');
+                console.log('ve break                 - 在光标位置换行');
+                console.log('ve write <内容>          - 在光标前写入内容');
+                console.log('ve del [数量]            - 删除光标前指定数量字符（默认1个）');
+                console.log('ve del range all         - 删除全部内容');
+                console.log('ve del range <开始> <结束> - 删除指定范围内容');
+                console.log('ve copy                  - 复制全部内容');
+                console.log('ve copy range <开始> <结束> - 复制指定范围内容');
+                console.log('ve paste                 - 在光标前粘贴内容');
+                console.log('ve paste range <开始> <结束> - 剪切指定范围并粘贴');
+                console.log('ve q                     - 退出编辑器（不保存）');
+                console.log('ve s                     - 保存文件');
+                console.log('ve qs                    - 保存并退出');
+            },
+
+            // 打开文件
+            handleOpen: function(args) {
+                if (args.length === 0) {
+                    console.error('请指定文件名: ve open <文件名>');
+                    return;
+                }
+
+                const fileName = args[0];
+                const fileInfo = getNodeByPath(fileName);
+
+                if (!fileInfo || fileInfo.isRoot || fileInfo.node.type !== 'file') {
+                    console.error(`文件 ${fileName} 不存在，创建新文件`);
+                    // 创建新文件
+                    const currentDirInfo = getNodeByPath('.');
+                    if (currentDirInfo && !currentDirInfo.isRoot && currentDirInfo.node.type === 'directory') {
+                        currentDirInfo.node.children[fileName] = {
+                            name: fileName,
+                            type: 'file',
+                            content: ''
+                        };
+                    }
+                    this.state.content = [''];
+                    this.state.currentFile = fileName;
+                } else {
+                    // 打开现有文件
+                    this.state.content = fileInfo.node.content.split('\n');
+                    this.state.currentFile = fileName;
+                    console.log(`已打开文件: ${fileName}`);
+                }
+
+                // 初始化光标位置
+                this.state.cursor = { row: 0, col: 0 };
+                this.state.isActive = true;
+                this.state.clipboard = '';
+
+                // 重定向控制台输出以显示编辑器界面
+                this.redirectConsole();
+                
+                // 显示初始内容
+                this.renderEditor();
+            },
+
+            // 移动光标
+            handleMove: function(args) {
+                if (args.length === 0) {
+                    console.error('请指定方向: ve move left/right [数量]');
+                    return;
+                }
+
+                const direction = args[0].toLowerCase();
+                const count = args.length > 1 ? parseInt(args[1]) : 1;
+
+                if (isNaN(count) || count <= 0) {
+                    console.error('数量必须是正整数');
+                    return;
+                }
+
+                const currentLine = this.state.content[this.state.cursor.row] || '';
+                
+                if (direction === 'left') {
+                    this.state.cursor.col = Math.max(0, this.state.cursor.col - count);
+                } else if (direction === 'right') {
+                    this.state.cursor.col = Math.min(currentLine.length, this.state.cursor.col + count);
+                } else {
+                    console.error('方向必须是 left 或 right');
+                    return;
+                }
+
+                this.renderEditor();
+            },
+
+            // 移动到指定行
+            handleLine: function(args) {
+                if (args.length === 0) {
+                    console.error('请指定行号: ve line <行号>');
+                    return;
+                }
+
+                const lineNum = parseInt(args[0]);
+                if (isNaN(lineNum) || lineNum < 1 || lineNum > this.state.content.length) {
+                    console.error(`行号必须在 1 到 ${this.state.content.length} 之间`);
+                    return;
+                }
+
+                // 转换为0-based索引
+                this.state.cursor.row = lineNum - 1;
+                // 将光标移动到该行的最大可能位置
+                const lineLength = this.state.content[this.state.cursor.row].length;
+                this.state.cursor.col = Math.min(this.state.cursor.col, lineLength);
+
+                this.renderEditor();
+            },
+
+            // 换行
+            handleBreak: function() {
+                const currentRow = this.state.cursor.row;
+                const currentCol = this.state.cursor.col;
+                const currentLine = this.state.content[currentRow] || '';
+
+                // 分割当前行
+                const linePart1 = currentLine.substring(0, currentCol);
+                const linePart2 = currentLine.substring(currentCol);
+
+                // 更新内容
+                this.state.content[currentRow] = linePart1;
+                this.state.content.splice(currentRow + 1, 0, linePart2);
+
+                // 移动光标到新行的开头
+                this.state.cursor.row = currentRow + 1;
+                this.state.cursor.col = 0;
+
+                this.renderEditor();
+            },
+
+            // 写入内容
+            handleWrite: function(args) {
+                if (args.length === 0) {
+                    console.error('请指定要写入的内容: ve write <内容>');
+                    return;
+                }
+
+                const text = args.join(' ');
+                const currentRow = this.state.cursor.row;
+                const currentCol = this.state.cursor.col;
+                const currentLine = this.state.content[currentRow] || '';
+
+                // 在光标位置插入文本
+                const newLine = currentLine.substring(0, currentCol) + text + currentLine.substring(currentCol);
+                this.state.content[currentRow] = newLine;
+
+                // 移动光标
+                this.state.cursor.col += text.length;
+
+                this.renderEditor();
+            },
+
+            // 删除操作
+            handleDelete: function(args) {
+                if (args.length === 0) {
+                    // 默认删除光标前一个字符
+                    this.deleteChars(1);
+                    return;
+                }
+
+                if (args[0] === 'range') {
+                    if (args.length < 2) {
+                        console.error('请指定删除范围: ve del range <开始> <结束> 或 ve del range all');
+                        return;
+                    }
+
+                    if (args[1] === 'all') {
+                        // 删除全部内容
+                        this.state.content = [''];
+                        this.state.cursor = { row: 0, col: 0 };
+                        this.renderEditor();
+                        return;
+                    }
+
+                    // 处理范围删除
+                    if (args.length < 3) {
+                        // 同一行内的范围
+                        const startCol = parseInt(args[1]) - 1; // 转换为0-based
+                        const endCol = parseInt(args[2]) - 1;
+                        
+                        if (isNaN(startCol) || isNaN(endCol) || startCol < 0 || endCol < startCol) {
+                            console.error('无效的范围参数');
+                            return;
+                        }
+
+                        const currentRow = this.state.cursor.row;
+                        const currentLine = this.state.content[currentRow] || '';
+                        
+                        if (endCol >= currentLine.length) {
+                            console.error('结束位置超出行长度');
+                            return;
+                        }
+
+                        // 删除范围内的字符
+                        const newLine = currentLine.substring(0, startCol) + currentLine.substring(endCol + 1);
+                        this.state.content[currentRow] = newLine;
+
+                        // 调整光标位置
+                        this.state.cursor.col = Math.min(startCol, newLine.length);
+                        
+                    } else {
+                        // 跨多行范围
+                        // 解析开始位置 "行,列"
+                        const startPos = args[1].split(',');
+                        const startRow = parseInt(startPos[0]) - 1;
+                        const startCol = parseInt(startPos[1]) - 1;
+                        
+                        // 解析结束位置 "行,列"
+                        const endPos = args[2].split(',');
+                        const endRow = parseInt(endPos[0]) - 1;
+                        const endCol = parseInt(endPos[1]) - 1;
+
+                        if (isNaN(startRow) || isNaN(startCol) || isNaN(endRow) || isNaN(endCol) ||
+                            startRow < 0 || endRow < startRow || endRow >= this.state.content.length) {
+                            console.error('无效的范围参数');
+                            return;
+                        }
+
+                        // 处理单行范围
+                        if (startRow === endRow) {
+                            const currentLine = this.state.content[startRow] || '';
+                            if (startCol < 0 || endCol < startCol || endCol >= currentLine.length) {
+                                console.error('无效的列范围');
+                                return;
+                            }
+                            
+                            const newLine = currentLine.substring(0, startCol) + currentLine.substring(endCol + 1);
+                            this.state.content[startRow] = newLine;
+                            this.state.cursor = { row: startRow, col: startCol };
+                        } else {
+                            // 处理多行范围
+                            // 1. 处理起始行
+                            const startLine = this.state.content[startRow] || '';
+                            this.state.content[startRow] = startLine.substring(0, startCol);
+                            
+                            // 2. 处理结束行
+                            const endLine = this.state.content[endRow] || '';
+                            const remainingEndLine = endLine.substring(endCol + 1);
+                            
+                            // 3. 合并起始行和结束行剩余部分
+                            this.state.content[startRow] += remainingEndLine;
+                            
+                            // 4. 删除中间行和结束行
+                            this.state.content.splice(startRow + 1, endRow - startRow);
+                            
+                            // 5. 调整光标位置
+                            this.state.cursor = { row: startRow, col: startCol };
+                        }
+                    }
+
+                    this.renderEditor();
+                    return;
+                }
+
+                // 处理删除指定数量的字符
+                const count = parseInt(args[0]);
+                if (isNaN(count) || count <= 0) {
+                    console.error('数量必须是正整数');
+                    return;
+                }
+
+                this.deleteChars(count);
+            },
+
+            // 删除光标前指定数量的字符
+            deleteChars: function(count) {
+                const currentRow = this.state.cursor.row;
+                const currentCol = this.state.cursor.col;
+                
+                if (currentCol === 0) {
+                    // 光标在行首，合并到上一行
+                    if (currentRow === 0) {
+                        console.log('已在文件开头，无法删除');
+                        return;
+                    }
+                    
+                    // 获取上一行内容
+                    const prevRow = currentRow - 1;
+                    const prevLine = this.state.content[prevRow] || '';
+                    const currentLine = this.state.content[currentRow] || '';
+                    
+                    // 合并行
+                    this.state.content[prevRow] = prevLine + currentLine;
+                    // 删除当前行
+                    this.state.content.splice(currentRow, 1);
+                    // 移动光标到上一行末尾
+                    this.state.cursor = {
+                        row: prevRow,
+                        col: prevLine.length
+                    };
+                } else {
+                    // 正常删除字符
+                    const currentLine = this.state.content[currentRow] || '';
+                    const deleteCount = Math.min(count, currentCol);
+                    const newLine = currentLine.substring(0, currentCol - deleteCount) + currentLine.substring(currentCol);
+                    this.state.content[currentRow] = newLine;
+                    this.state.cursor.col -= deleteCount;
+                }
+
+                this.renderEditor();
+            },
+
+            // 复制操作
+            handleCopy: function(args) {
+                if (args.length === 0) {
+                    // 复制全部内容
+                    this.state.clipboard = this.state.content.join('\n');
+                    console.log('已复制全部内容到剪贴板');
+                    this.renderEditor();
+                    return;
+                }
+
+                if (args[0] === 'range' && args.length >= 3) {
+                    // 复制指定范围
+                    try {
+                        let startRow, startCol, endRow, endCol;
+                        
+                        if (args.length === 3) {
+                            // 同一行内的范围
+                            startRow = this.state.cursor.row;
+                            endRow = this.state.cursor.row;
+                            startCol = parseInt(args[1]) - 1;
+                            endCol = parseInt(args[2]) - 1;
+                        } else {
+                            // 跨多行范围
+                            const startPos = args[1].split(',');
+                            startRow = parseInt(startPos[0]) - 1;
+                            startCol = parseInt(startPos[1]) - 1;
+                            
+                            const endPos = args[2].split(',');
+                            endRow = parseInt(endPos[0]) - 1;
+                            endCol = parseInt(endPos[1]) - 1;
+                        }
+
+                        if (isNaN(startRow) || isNaN(startCol) || isNaN(endRow) || isNaN(endCol) ||
+                            startRow < 0 || endRow < startRow || endRow >= this.state.content.length) {
+                            throw new Error('无效的范围参数');
+                        }
+
+                        let copyContent = '';
+                        
+                        if (startRow === endRow) {
+                            // 单行复制
+                            const line = this.state.content[startRow] || '';
+                            if (startCol < 0 || endCol < startCol || endCol >= line.length) {
+                                throw new Error('无效的列范围');
+                            }
+                            copyContent = line.substring(startCol, endCol + 1);
+                        } else {
+                            // 多行复制
+                            // 起始行
+                            const startLine = this.state.content[startRow] || '';
+                            copyContent += startLine.substring(startCol) + '\n';
+                            
+                            // 中间行
+                            for (let i = startRow + 1; i < endRow; i++) {
+                                copyContent += this.state.content[i] + '\n';
+                            }
+                            
+                            // 结束行
+                            const endLine = this.state.content[endRow] || '';
+                            copyContent += endLine.substring(0, endCol + 1);
+                        }
+
+                        this.state.clipboard = copyContent;
+                        console.log('已复制指定范围内容到剪贴板');
+                    } catch (error) {
+                        console.error(`复制失败: ${error.message}`);
+                    }
+                    
+                    this.renderEditor();
+                    return;
+                }
+
+                console.error('无效的复制命令，使用 ve copy 或 ve copy range <范围>');
+            },
+
+            // 粘贴操作
+            handlePaste: function(args) {
+                if (this.state.clipboard === '') {
+                    console.log('剪贴板为空');
+                    return;
+                }
+
+                if (args.length === 0) {
+                    // 简单粘贴
+                    this.pasteContent(this.state.clipboard);
+                    return;
+                }
+
+                if (args[0] === 'range' && args.length >= 3) {
+                    // 剪切指定范围并粘贴
+                    try {
+                        let startRow, startCol, endRow, endCol;
+                        
+                        if (args.length === 3) {
+                            // 同一行内的范围
+                            startRow = this.state.cursor.row;
+                            endRow = this.state.cursor.row;
+                            startCol = parseInt(args[1]) - 1;
+                            endCol = parseInt(args[2]) - 1;
+                        } else {
+                            // 跨多行范围
+                            const startPos = args[1].split(',');
+                            startRow = parseInt(startPos[0]) - 1;
+                            startCol = parseInt(startPos[1]) - 1;
+                            
+                            const endPos = args[2].split(',');
+                            endRow = parseInt(endPos[0]) - 1;
+                            endCol = parseInt(endPos[1]) - 1;
+                        }
+
+                        // 先保存要剪切的内容
+                        let cutContent = '';
+                        if (startRow === endRow) {
+                            const line = this.state.content[startRow] || '';
+                            cutContent = line.substring(startCol, endCol + 1);
+                        } else {
+                            const startLine = this.state.content[startRow] || '';
+                            cutContent += startLine.substring(startCol) + '\n';
+                            
+                            for (let i = startRow + 1; i < endRow; i++) {
+                                cutContent += this.state.content[i] + '\n';
+                            }
+                            
+                            const endLine = this.state.content[endRow] || '';
+                            cutContent += endLine.substring(0, endCol + 1);
+                        }
+
+                        // 删除指定范围内容
+                        if (startRow === endRow) {
+                            const line = this.state.content[startRow] || '';
+                            this.state.content[startRow] = line.substring(0, startCol) + line.substring(endCol + 1);
+                            this.state.cursor = { row: startRow, col: startCol };
+                        } else {
+                            const startLine = this.state.content[startRow] || '';
+                            this.state.content[startRow] = startLine.substring(0, startCol);
+                            
+                            const endLine = this.state.content[endRow] || '';
+                            const remainingEndLine = endLine.substring(endCol + 1);
+                            
+                            this.state.content[startRow] += remainingEndLine;
+                            this.state.content.splice(startRow + 1, endRow - startRow);
+                            
+                            this.state.cursor = { row: startRow, col: startCol };
+                        }
+
+                        // 粘贴剪切的内容
+                        this.state.clipboard = cutContent;
+                        this.pasteContent(cutContent);
+                        
+                        console.log('已剪切并粘贴指定范围内容');
+                    } catch (error) {
+                        console.error(`剪切粘贴失败: ${error.message}`);
+                    }
+                    
+                    this.renderEditor();
+                    return;
+                }
+
+                console.error('无效的粘贴命令，使用 ve paste 或 ve paste range <范围>');
+            },
+
+            // 粘贴内容到光标位置
+            pasteContent: function(content) {
+                const lines = content.split('\n');
+                const currentRow = this.state.cursor.row;
+                const currentCol = this.state.cursor.col;
+                const currentLine = this.state.content[currentRow] || '';
+
+                if (lines.length === 1) {
+                    // 单行内容，直接插入
+                    const newLine = currentLine.substring(0, currentCol) + lines[0] + currentLine.substring(currentCol);
+                    this.state.content[currentRow] = newLine;
+                    this.state.cursor.col += lines[0].length;
+                } else {
+                    // 多行内容，需要拆分处理
+                    // 1. 处理当前行
+                    const firstLine = lines[0];
+                    const remainingLines = lines.slice(1);
+                    const newCurrentLine = currentLine.substring(0, currentCol) + firstLine;
+                    this.state.content[currentRow] = newCurrentLine;
+                    
+                    // 2. 插入剩余行
+                    this.state.content.splice(currentRow + 1, 0, ...remainingLines);
+                    
+                    // 3. 调整光标位置
+                    this.state.cursor.row = currentRow + remainingLines.length;
+                    this.state.cursor.col = remainingLines.length > 0 
+                        ? remainingLines[remainingLines.length - 1].length 
+                        : currentCol + firstLine.length;
+                }
+
+                this.renderEditor();
+            },
+
+            // 保存文件
+            handleSave: function() {
+                if (!this.state.currentFile) {
+                    console.error('没有打开的文件');
+                    return;
+                }
+
+                const fileInfo = getNodeByPath(this.state.currentFile);
+                if (fileInfo && !fileInfo.isRoot && fileInfo.node.type === 'file') {
+                    fileInfo.node.content = this.state.content.join('\n');
+                    console.log(`文件 ${this.state.currentFile} 已保存`);
+                } else {
+                    console.error(`无法保存文件 ${this.state.currentFile}: 文件不存在`);
+                }
+
+                this.renderEditor();
+            },
+
+            // 退出编辑器
+            handleQuit: function(saved) {
+                if (!saved) {
+                    console.log(`已退出编辑器，未保存的更改将丢失`);
+                }
+                
+                this.state.isActive = false;
+                this.state.currentFile = null;
+                
+                // 恢复原始控制台
+                this.restoreConsole();
+            },
+
+            // 重定向控制台输出以显示编辑器界面
+            redirectConsole: function() {
+                if (this.state.originalConsole) return;
+                
+                this.state.originalConsole = {
+                    log: console.log,
+                    error: console.error,
+                    warn: console.warn
+                };
+
+                // 重写控制台方法，确保编辑器界面始终显示
+                console.log = function(...args) {
+                    veEditor.state.originalConsole.log(...args);
+                    veEditor.renderEditor();
+                };
+
+                console.error = function(...args) {
+                    veEditor.state.originalConsole.error(...args);
+                    veEditor.renderEditor();
+                };
+
+                console.warn = function(...args) {
+                    veEditor.state.originalConsole.warn(...args);
+                    veEditor.renderEditor();
+                };
+            },
+
+            // 恢复原始控制台
+            restoreConsole: function() {
+                if (this.state.originalConsole) {
+                    console.log = this.state.originalConsole.log;
+                    console.error = this.state.originalConsole.error;
+                    console.warn = this.state.originalConsole.warn;
+                    this.state.originalConsole = null;
+                }
+            },
+
+            // 渲染编辑器界面
+            renderEditor: function() {
+                if (!this.state.isActive) return;
+                
+                // 清空输出
+                outputDiv.innerHTML = '';
+                
+                // 显示文件名
+                const fileLine = document.createElement('p');
+                fileLine.className = 'info';
+                fileLine.textContent = `正在编辑: ${this.state.currentFile}`;
+                outputDiv.appendChild(fileLine);
+                
+                // 显示分隔线
+                const separator = document.createElement('p');
+                separator.className = 'log';
+                separator.textContent = repeatChar('-', 40);
+                outputDiv.appendChild(separator);
+                
+                // 显示内容和行号
+                this.state.content.forEach((line, rowIndex) => {
+                    const lineElement = document.createElement('p');
+                    lineElement.className = 'log';
+                    
+                    // 行号 - 蓝色[]和红色数字
+                    const lineNumber = document.createElement('span');
+                    lineNumber.style.color = '#00ffff'; // 蓝色
+                    lineNumber.textContent = '[';
+                    
+                    const lineNumValue = document.createElement('span');
+                    lineNumValue.style.color = '#ff4d4d'; // 红色
+                    lineNumValue.textContent = (rowIndex + 1).toString();
+                    
+                    const lineNumberEnd = document.createElement('span');
+                    lineNumberEnd.style.color = '#00ffff'; // 蓝色
+                    lineNumberEnd.textContent = '] ';
+                    
+                    // 文本内容
+                    const textContent = document.createElement('span');
+                    
+                    // 处理光标显示
+                    if (rowIndex === this.state.cursor.row) {
+                        // 光标所在行
+                        const beforeCursor = line.substring(0, this.state.cursor.col);
+                        const afterCursor = line.substring(this.state.cursor.col);
+                        
+                        const beforeSpan = document.createElement('span');
+                        beforeSpan.textContent = beforeCursor;
+                        
+                        const cursorSpan = document.createElement('span');
+                        cursorSpan.style.color = '#ff4d4d'; // 红色光标
+                        cursorSpan.textContent = '█';
+                        
+                        const afterSpan = document.createElement('span');
+                        afterSpan.textContent = afterCursor;
+                        
+                        textContent.appendChild(beforeSpan);
+                        textContent.appendChild(cursorSpan);
+                        textContent.appendChild(afterSpan);
+                    } else {
+                        // 普通行
+                        textContent.textContent = line;
+                    }
+                    
+                    // 组合行元素
+                    lineElement.appendChild(lineNumber);
+                    lineElement.appendChild(lineNumValue);
+                    lineElement.appendChild(lineNumberEnd);
+                    lineElement.appendChild(textContent);
+                    
+                    outputDiv.appendChild(lineElement);
+                });
+                
+                // 显示分隔线
+                outputDiv.appendChild(separator.cloneNode(true));
+                
+                // 显示提示信息
+                const hintLine = document.createElement('p');
+                hintLine.className = 'info';
+                hintLine.textContent = `光标位置: 行 ${this.state.cursor.row + 1}, 列 ${this.state.cursor.col + 1} | 输入 ve help 查看命令`;
+                outputDiv.appendChild(hintLine);
+                
+                scrollToBottom();
+            }
+        };
+
+
+        // 命令执行器 - 添加自定义命令支持和ve编辑器
+        function executeCommand(command) {
+            const p = document.createElement('p');
+            p.className = 'log';
+            p.textContent = `> ${command}`; // 命令行前缀
+            outputDiv.appendChild(p);
+            
+            const parts = command.trim().split(/\s+/).filter(part => part !== '');
+            if (parts.length === 0) return;
+
+
+            const cmd = parts[0].toLowerCase();
+            const args = parts.slice(1);
+            
+            // 先尝试执行自定义命令
+            if (CommandManager.execute(cmd, args)) {
+                return;
+            }
+
+            // 处理ve编辑器命令
+            if (cmd === 've') {
+                veEditor.handleCommand(args);
+                return;
+            }
+
+
+            // 执行其他系统命令
+            switch (cmd) {
+                case 'ls':
+                    ls(args.length > 0 ? args[0] : '.');
+                    break;
+                    
+                case 'tree':
+                    tree(args.length > 0 ? args[0] : '.');
+                    break;
+                    
+                case 'lsd':
+                    lsd();
+                    break;
+                    
+                case 'cd':
+                    cd(args.length > 0 ? args[0] : '/');
+                    break;
+                    
+                case 'mkdir':
+                    args.length === 1 ? mkdir(args[0]) : console.error("使用方法: mkdir <目录名>");
+                    break;
+                    
+                case 'touch':
+                    args.length === 1 ? touch(args[0]) : console.error("使用方法: touch <文件名>");
+                    break;
+                    
+                case 'rm':
+                    args.length === 1 ? rm(args[0]) : console.error("使用方法: rm <路径>");
+                    break;
+                    
+                case 'cat':
+                    args.length === 1 ? cat(args[0]) : console.error("使用方法: cat <文件名>");
+                    break;
+                    
+                case 'ld':
+                    args.length === 1 ? switchDisk(args[0]) : console.error("使用方法: ld <磁盘名>");
+                    break;
+                    
+                case 'mount':
+                    mount();
+                    break;
+                    
+                case 'unmount':
+                    args.length === 1 ? unmount(args[0]) : console.error("使用方法: unmount <磁盘名>");
+                    break;
+                    
+                case 'ipj':
+                    importFolder();
+                    break;
+                    
+                case 'ife':
+                    importFile();
+                    break;
+                    
+                case 'odk':
+                    exportAsDk(args.length > 0 ? args[0] : null);
+                    break;
+                    
+                case 'run':
+                    args.length === 1 ? run(args[0]) : console.error("使用方法: run <文件名>");
+                    break;
+                    
+                // 新增：js命令处理
+                case 'js':
+                    if (args.length > 0) {
+                        // 合并所有参数作为要执行的JavaScript代码
+                        const jsCode = args.join(' ');
+                        executeJavaScript(jsCode);
+                    } else {
+                        console.error("使用方法: js <JavaScript代码>，例如: js console.log('hello')");
+                    }
+                    break;
+                    
+                case 'dd':
+                    if (args.length >= 1) {
+                        dd(args[0], args.length >= 2 ? args[1] : null);
+                    } else {
+                        console.error("使用方法: dd <url> [保存路径] (url为必填参数)");
+                    }
+                    break;
+                    
+                case 'dlist':
+                    dlist();
+                    break;
+                    
+                case 'dstop':
+                    dstop(args.length >= 1 ? args[0] : null);
+                    break;
+                    
+                case 'dstart':
+                    dstart(args.length >= 1 ? args[0] : null);
+                    break;
+                    
+                case 'drm':
+                    drm(args.length >= 1 ? args[0] : null);
+                    break;
+                    
+                case 'dlsc':
+                    dlsc();
+                    break;
+                    
+                case 'mv':
+                    if (args.length === 2) {
+                        mv(args[0], args[1]);
+                    } else {
+                        console.error("使用方法: mv <源路径> <目标路径>");
+                    }
+                    break;
+                    
+                case 'cp':
+                    if (args.length === 2) {
+                        cp(args[0], args[1]);
+                    } else {
+                        console.error("使用方法: cp <源路径> <目标路径>");
+                    }
+                    break;
+                    
+                case 'clear':
+                    clearScreen();
+                    break;
+                    
+                case 'help':
+                    showHelp();
+                    break;
+                    
+                // 命令管理相关命令
+                case 'registercmd':
+                    registerCommand(args);
+                    break;
+                    
+                case 'unregistercmd':
+                    unregisterCommand(args);
+                    break;
+                    
+                case 'listcmds':
+                    listCommands(args);
+                    break;
+                    
+                default:
+                    console.error(`未知命令: ${cmd}，输入 help 查看可用命令`);
+            }
+        }
+
+
+        // 事件监听
+        commandInput.addEventListener('keypress', function(event) {
+            if (event.key === 'Enter') {
+                const command = commandInput.value.trim();
+                if (command) executeCommand(command);
+                commandInput.value = '';
+            }
+        });
+
+        // 允许使用鼠标滚轮滚动终端内容
+        terminalDiv.addEventListener('wheel', function(e) {
+            // 自然滚动行为，不需要额外处理
+        });
+
+
+        // 初始化
+        veEditor.init(); // 初始化ve编辑器
+        updateCurrentPath();
+        commandInput.focus();
+        console.log("欢迎使用 BlockOS");
+        console.log("最新更新:");
+        console.log("  - 集成了ve文本编辑器");
+        console.log("  - 输入 ve help 查看编辑器使用方法");
+        console.log("  - 输入 help 查看完整命令列表");
+    </script>
+</body>
+</html>

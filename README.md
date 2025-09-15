@@ -1,1 +1,2 @@
 # blockos
+blockos是可以运行js的webos，里面提供了命令注册方面的api，同时你也可以安装ve编辑器(visual editor)来在blockos里面开发你的js程序

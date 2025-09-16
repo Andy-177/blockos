@@ -57,6 +57,9 @@
                     case 'paste':
                         handlePaste(subArgs);
                         break;
+                    case 'space':
+                        handleSpace(subArgs);
+                        break;
                     case 'q':
                         handleQuit(false);
                         break;
@@ -84,9 +87,14 @@
         console.log('=== ve编辑器命令帮助 ===');
         console.log('ve open <文件名>         - 打开文件进行编辑');
         console.log('ve move left/right [数量] - 移动光标（默认1格）');
+        console.log('ve move start            - 将光标移动到当前行首');
+        console.log('ve move end              - 将光标移动到当前行尾');
         console.log('ve line <行号>           - 将光标移动到指定行');
+        console.log('ve line start            - 将光标移动到第一行');
+        console.log('ve line end              - 将光标移动到最后一行');
         console.log('ve break                 - 在光标位置换行');
         console.log('ve write <内容>          - 在光标前写入内容');
+        console.log('ve space [数量]          - 在光标前插入空格（默认1个）');
         console.log('ve del [数量]            - 删除光标前指定数量字符（默认1个）');
         console.log('ve del range all         - 删除全部内容');
         console.log('ve del range <开始> <结束> - 删除指定范围内容');
@@ -144,26 +152,35 @@
     // 移动光标
     function handleMove(args) {
         if (args.length === 0) {
-            console.error('请指定方向: ve move left/right [数量]');
+            console.error('请指定方向: ve move left/right [数量] 或 ve move start/end');
             return;
         }
 
         const direction = args[0].toLowerCase();
         const count = args.length > 1 ? parseInt(args[1]) : 1;
 
-        if (isNaN(count) || count <= 0) {
-            console.error('数量必须是正整数');
-            return;
-        }
-
         const currentLine = veState.content[veState.cursor.row] || '';
         
         if (direction === 'left') {
+            if (isNaN(count) || count <= 0) {
+                console.error('数量必须是正整数');
+                return;
+            }
             veState.cursor.col = Math.max(0, veState.cursor.col - count);
         } else if (direction === 'right') {
+            if (isNaN(count) || count <= 0) {
+                console.error('数量必须是正整数');
+                return;
+            }
             veState.cursor.col = Math.min(currentLine.length, veState.cursor.col + count);
+        } else if (direction === 'start') {
+            // 移动到行首
+            veState.cursor.col = 0;
+        } else if (direction === 'end') {
+            // 移动到行尾
+            veState.cursor.col = currentLine.length;
         } else {
-            console.error('方向必须是 left 或 right');
+            console.error('方向必须是 left, right, start 或 end');
             return;
         }
 
@@ -173,18 +190,28 @@
     // 移动到指定行
     function handleLine(args) {
         if (args.length === 0) {
-            console.error('请指定行号: ve line <行号>');
+            console.error('请指定行号: ve line <行号> 或 ve line start/end');
             return;
         }
 
-        const lineNum = parseInt(args[0]);
-        if (isNaN(lineNum) || lineNum < 1 || lineNum > veState.content.length) {
-            console.error(`行号必须在 1 到 ${veState.content.length} 之间`);
-            return;
+        const lineSpec = args[0].toLowerCase();
+        
+        if (lineSpec === 'start') {
+            // 移动到第一行
+            veState.cursor.row = 0;
+        } else if (lineSpec === 'end') {
+            // 移动到最后一行
+            veState.cursor.row = veState.content.length - 1;
+        } else {
+            // 移动到指定行号
+            const lineNum = parseInt(lineSpec);
+            if (isNaN(lineNum) || lineNum < 1 || lineNum > veState.content.length) {
+                console.error(`行号必须在 1 到 ${veState.content.length} 之间`);
+                return;
+            }
+            veState.cursor.row = lineNum - 1; // 转换为0-based索引
         }
 
-        // 转换为0-based索引
-        veState.cursor.row = lineNum - 1;
         // 将光标移动到该行的最大可能位置
         const lineLength = veState.content[veState.cursor.row].length;
         veState.cursor.col = Math.min(veState.cursor.col, lineLength);
@@ -231,6 +258,31 @@
 
         // 移动光标
         veState.cursor.col += text.length;
+
+        renderEditor();
+    }
+
+    // 插入空格
+    function handleSpace(args) {
+        const count = args.length > 0 ? parseInt(args[0]) : 1;
+        
+        if (isNaN(count) || count <= 0) {
+            console.error('数量必须是正整数');
+            return;
+        }
+        
+        // 生成指定数量的空格
+        const spaces = ' '.repeat(count);
+        const currentRow = veState.cursor.row;
+        const currentCol = veState.cursor.col;
+        const currentLine = veState.content[currentRow] || '';
+
+        // 在光标位置插入空格
+        const newLine = currentLine.substring(0, currentCol) + spaces + currentLine.substring(currentCol);
+        veState.content[currentRow] = newLine;
+
+        // 移动光标
+        veState.cursor.col += count;
 
         renderEditor();
     }
@@ -730,6 +782,11 @@
         outputDiv.appendChild(hintLine);
         
         scrollToBottom();
+    }
+
+    // 工具函数：生成重复字符
+    function repeatChar(char, count) {
+        return new Array(count + 1).join(char);
     }
 
     // 初始化 - 注册ve命令

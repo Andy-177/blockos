@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>BlockOS Terminal with ve Editor</title>
+    <title>BlockOS Terminal with ve Editor Editor</title>
     <style>
         /* 保持严格的命令行风格 */
         body {
@@ -15,7 +15,7 @@
             height: 100vh;
             display: flex;
             flex-direction: column;
-            overflow: hidden; /* 防止页面整体滚动 */
+            overflow: hidden; /* 防止页面整体整体滚动 */
         }
         .terminal {
             flex: 1;
@@ -65,7 +65,7 @@
             white-space: pre;
         }
 
-        /* 滚动条样式美化 */
+        /* 滚动条条样式美化 */
         ::-webkit-scrollbar {
             width: 8px;
             height: 8px;
@@ -1848,7 +1848,10 @@
             console.log("\n文本编辑:");
             console.log("  ve open <文件名>   - 打开文件进行编辑");
             console.log("  ve move left/right [数量] - 移动光标（默认1格）");
+            console.log("  ve move start/end  - 移动光标到行首/行尾");
             console.log("  ve line <行号>     - 将光标移动到指定行");
+            console.log("  ve line start/end  - 将光标移动到第一行/最后一行");
+            console.log("  ve space [数量]    - 插入空格（默认1个）");
             console.log("  ve break           - 在光标位置换行");
             console.log("  ve write <内容>    - 在光标前写入内容");
             console.log("  ve del [参数]      - 删除字符或范围");
@@ -2022,6 +2025,9 @@
                     case 'help':
                         this.showHelp();
                         break;
+                    case 'space':  // 新增空格命令
+                        this.handleSpace(subArgs);
+                        break;
                     default:
                         console.error(`未知的ve子命令: ${subCmd}`);
                         this.showHelp();
@@ -2033,7 +2039,10 @@
                 console.log('=== ve编辑器命令帮助 ===');
                 console.log('ve open <文件名>         - 打开文件进行编辑');
                 console.log('ve move left/right [数量] - 移动光标（默认1格）');
+                console.log('ve move start/end        - 移动光标到行首/行尾');
                 console.log('ve line <行号>           - 将光标移动到指定行');
+                console.log('ve line start/end        - 将光标移动到第一行/最后一行');
+                console.log('ve space [数量]          - 插入空格（默认1个）');
                 console.log('ve break                 - 在光标位置换行');
                 console.log('ve write <内容>          - 在光标前写入内容');
                 console.log('ve del [数量]            - 删除光标前指定数量字符（默认1个）');
@@ -2090,10 +2099,10 @@
                 this.renderEditor();
             },
 
-            // 移动光标
+            // 移动光标 - 增强版，支持start和end
             handleMove: function(args) {
                 if (args.length === 0) {
-                    console.error('请指定方向: ve move left/right [数量]');
+                    console.error('请指定方向: ve move left/right/start/end [数量]');
                     return;
                 }
 
@@ -2107,36 +2116,85 @@
 
                 const currentLine = this.state.content[this.state.cursor.row] || '';
                 
-                if (direction === 'left') {
-                    this.state.cursor.col = Math.max(0, this.state.cursor.col - count);
-                } else if (direction === 'right') {
-                    this.state.cursor.col = Math.min(currentLine.length, this.state.cursor.col + count);
-                } else {
-                    console.error('方向必须是 left 或 right');
-                    return;
+                switch (direction) {
+                    case 'left':
+                        this.state.cursor.col = Math.max(0, this.state.cursor.col - count);
+                        break;
+                    case 'right':
+                        this.state.cursor.col = Math.min(currentLine.length, this.state.cursor.col + count);
+                        break;
+                    case 'start':  // 移动到行首
+                        this.state.cursor.col = 0;
+                        break;
+                    case 'end':    // 移动到行尾
+                        this.state.cursor.col = currentLine.length;
+                        break;
+                    default:
+                        console.error('方向必须是 left, right, start 或 end');
+                        return;
                 }
 
                 this.renderEditor();
             },
 
-            // 移动到指定行
+            // 移动到指定行 - 增强版，支持start和end
             handleLine: function(args) {
                 if (args.length === 0) {
-                    console.error('请指定行号: ve line <行号>');
+                    console.error('请指定行号: ve line <行号> 或 ve line start/end');
                     return;
                 }
 
-                const lineNum = parseInt(args[0]);
-                if (isNaN(lineNum) || lineNum < 1 || lineNum > this.state.content.length) {
-                    console.error(`行号必须在 1 到 ${this.state.content.length} 之间`);
-                    return;
+                const lineSpec = args[0].toLowerCase();
+                
+                if (lineSpec === 'start') {
+                    // 移动到第一行
+                    this.state.cursor.row = 0;
+                    this.state.cursor.col = 0;
+                } else if (lineSpec === 'end') {
+                    // 移动到最后一行
+                    this.state.cursor.row = this.state.content.length - 1;
+                    const lineLength = this.state.content[this.state.cursor.row].length;
+                    this.state.cursor.col = lineLength;
+                } else {
+                    // 移动到指定行号
+                    const lineNum = parseInt(lineSpec);
+                    if (isNaN(lineNum) || lineNum < 1 || lineNum > this.state.content.length) {
+                        console.error(`行号必须在 1 到 ${this.state.content.length} 之间`);
+                        return;
+                    }
+
+                    // 转换为0-based索引
+                    this.state.cursor.row = lineNum - 1;
+                    // 将光标移动到该行的最大可能位置
+                    const lineLength = this.state.content[this.state.cursor.row].length;
+                    this.state.cursor.col = Math.min(this.state.cursor.col, lineLength);
                 }
 
-                // 转换为0-based索引
-                this.state.cursor.row = lineNum - 1;
-                // 将光标移动到该行的最大可能位置
-                const lineLength = this.state.content[this.state.cursor.row].length;
-                this.state.cursor.col = Math.min(this.state.cursor.col, lineLength);
+                this.renderEditor();
+            },
+
+            // 新增：插入空格
+            handleSpace: function(args) {
+                const count = args.length > 0 ? parseInt(args[0]) : 1;
+                
+                if (isNaN(count) || count <= 0) {
+                    console.error('数量必须是正整数');
+                    return;
+                }
+                
+                // 生成指定数量的空格
+                const spaces = repeatChar(' ', count);
+                
+                const currentRow = this.state.cursor.row;
+                const currentCol = this.state.cursor.col;
+                const currentLine = this.state.content[currentRow] || '';
+
+                // 在光标位置插入空格
+                const newLine = currentLine.substring(0, currentCol) + spaces + currentLine.substring(currentCol);
+                this.state.content[currentRow] = newLine;
+
+                // 移动光标
+                this.state.cursor.col += count;
 
                 this.renderEditor();
             },
@@ -2874,7 +2932,10 @@
         commandInput.focus();
         console.log("欢迎使用 BlockOS");
         console.log("最新更新:");
-        console.log("  - 集成了ve文本编辑器");
+        console.log("  - 增强了ve文本编辑器功能");
+        console.log("  - 新增 ve space [数量] 命令插入空格");
+        console.log("  - 新增 ve move start/end 命令移动到行首/行尾");
+        console.log("  - 新增 ve line start/end 命令移动到第一行/最后一行");
         console.log("  - 输入 ve help 查看编辑器使用方法");
         console.log("  - 输入 help 查看完整命令列表");
     </script>
